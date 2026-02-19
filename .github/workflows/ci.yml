@@ -39,3 +39,5 @@ jobs:
       - uses: astral-sh/setup-uv@v4
       - run: uv sync --frozen
       - run: uv run pre-commit run --all-files
+        env:
+          SKIP: no-commit-to-branch
