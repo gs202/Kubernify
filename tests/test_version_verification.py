@@ -308,7 +308,7 @@ class TestValidateManifest:
             "frontend": [MagicMock()],
         }
 
-        errors = validate_manifest(manifest=manifest, component_map=component_map)
+        errors = validate_manifest(manifest=manifest, component_map=component_map)  # type: ignore[arg-type]
 
         assert errors == []
 
@@ -319,7 +319,7 @@ class TestValidateManifest:
             "backend": [MagicMock()],
         }
 
-        errors = validate_manifest(manifest=manifest, component_map=component_map)
+        errors = validate_manifest(manifest=manifest, component_map=component_map)  # type: ignore[arg-type]
 
         assert len(errors) == 1
         assert "missing-svc" in errors[0]

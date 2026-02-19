@@ -119,8 +119,8 @@ class TestWorkloadType:
 
     def test_workload_type_enum_values(self) -> None:
         """Verify enum string values match Kubernetes resource kinds."""
-        assert WorkloadType.DEPLOYMENT == "Deployment"
-        assert WorkloadType.STATEFUL_SET == "StatefulSet"
-        assert WorkloadType.DAEMON_SET == "DaemonSet"
-        assert WorkloadType.JOB == "Job"
-        assert WorkloadType.CRON_JOB == "CronJob"
+        assert str(WorkloadType.DEPLOYMENT) == "Deployment"
+        assert str(WorkloadType.STATEFUL_SET) == "StatefulSet"
+        assert str(WorkloadType.DAEMON_SET) == "DaemonSet"
+        assert str(WorkloadType.JOB) == "Job"
+        assert str(WorkloadType.CRON_JOB) == "CronJob"

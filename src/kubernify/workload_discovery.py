@@ -83,7 +83,7 @@ class WorkloadDiscovery:
     def inspect_workload(
         self,
         workload_name: str,
-        workload_type: str,
+        workload_type: WorkloadType,
         namespace: str,
         workload_obj: KubernetesWorkload | None = None,
     ) -> WorkloadInspectionResult:
@@ -126,7 +126,7 @@ class WorkloadDiscovery:
     def _get_daemonset_revision(self, workload_name: str, namespace: str) -> RevisionInfo | None:
         """Helper to extract DaemonSet revision from pod template labels."""
         try:
-            ds = self.k8s_controller._apps_v1.read_namespaced_daemon_set(name=workload_name, namespace=namespace)
+            ds = self.k8s_controller.apps_v1.read_namespaced_daemon_set(name=workload_name, namespace=namespace)
             labels = ds.spec.template.metadata.labels or {}
             revision_hash = labels.get("controller-revision-hash", "")
             if revision_hash:
@@ -134,6 +134,7 @@ class WorkloadDiscovery:
             self.logger.warning(f"DaemonSet {workload_name} pod template has no 'controller-revision-hash' label")
         except Exception as e:
             self.logger.warning(f"Failed to get DaemonSet revision for {workload_name}: {e}")
+        return None
 
     def discover_cluster_state(
         self,
