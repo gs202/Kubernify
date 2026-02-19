@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
-from unittest.mock import mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from kubernify.cli import _get_current_namespace, _setup_logging, load_manifest, parse_args
+from kubernify.cli import (
+    _get_current_namespace,
+    _parse_comma_list,
+    _setup_logging,
+    load_manifest,
+    parse_args,
+    run_verification,
+)
 
 # ---------------------------------------------------------------------------
 # Argument parsing tests
@@ -186,3 +194,449 @@ class TestLoadManifest:
         """Verify ValueError is raised on invalid JSON."""
         with pytest.raises(ValueError, match="not valid JSON"):
             load_manifest("{invalid json}")
+
+
+# ---------------------------------------------------------------------------
+# _parse_comma_list tests
+# ---------------------------------------------------------------------------
+
+
+class TestParseCommaList:
+    """Tests for ``_parse_comma_list`` helper."""
+
+    def test_parse_comma_list_none(self) -> None:
+        """Verify None input returns empty list."""
+        result = _parse_comma_list(None)
+
+        assert result == []
+
+    def test_parse_comma_list_empty_string(self) -> None:
+        """Verify empty string returns empty list."""
+        result = _parse_comma_list("")
+
+        assert result == []
+
+    def test_parse_comma_list_single_item(self) -> None:
+        """Verify single item is returned as a one-element list."""
+        result = _parse_comma_list("frontend")
+
+        assert result == ["frontend"]
+
+    def test_parse_comma_list_multiple_items(self) -> None:
+        """Verify multiple comma-separated items are split correctly."""
+        result = _parse_comma_list("frontend, backend, api")
+
+        assert result == ["frontend", "backend", "api"]
+
+    def test_parse_comma_list_strips_whitespace(self) -> None:
+        """Verify leading/trailing whitespace is stripped from each item."""
+        result = _parse_comma_list("  frontend ,  backend  ,api  ")
+
+        assert result == ["frontend", "backend", "api"]
+
+    def test_parse_comma_list_skips_empty_segments(self) -> None:
+        """Verify empty segments from trailing commas are excluded."""
+        result = _parse_comma_list("frontend,,backend,")
+
+        assert result == ["frontend", "backend"]
+
+
+# ---------------------------------------------------------------------------
+# Explicit flag value parsing tests
+# ---------------------------------------------------------------------------
+
+
+class TestParseArgsExplicitValues:
+    """Tests for CLI flags with explicitly provided values."""
+
+    def test_parse_args_namespace_explicit(self) -> None:
+        """Verify --namespace sets args.namespace to the provided value."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--namespace",
+                "staging",
+            ]
+        )
+
+        assert args.namespace == "staging"
+
+    def test_parse_args_timeout_explicit(self) -> None:
+        """Verify --timeout sets args.timeout to the provided value."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--timeout",
+                "600",
+            ]
+        )
+
+        assert args.timeout == 600
+
+    def test_parse_args_restart_threshold_explicit(self) -> None:
+        """Verify --restart-threshold sets args.restart_threshold to the provided value."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--restart-threshold",
+                "10",
+            ]
+        )
+
+        assert args.restart_threshold == 10
+
+    def test_parse_args_min_uptime_explicit(self) -> None:
+        """Verify --min-uptime sets args.min_uptime to the provided value."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--min-uptime",
+                "60",
+            ]
+        )
+
+        assert args.min_uptime == 60
+
+    def test_parse_args_allow_zero_replicas_flag(self) -> None:
+        """Verify --allow-zero-replicas sets the flag to True."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--allow-zero-replicas",
+            ]
+        )
+
+        assert args.allow_zero_replicas is True
+
+    def test_parse_args_dry_run_flag(self) -> None:
+        """Verify --dry-run sets the flag to True."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--dry-run",
+            ]
+        )
+
+        assert args.dry_run is True
+
+    def test_parse_args_include_statefulsets_flag(self) -> None:
+        """Verify --include-statefulsets sets the flag to True."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--include-statefulsets",
+            ]
+        )
+
+        assert args.include_statefulsets is True
+
+    def test_parse_args_no_include_statefulsets_flag(self) -> None:
+        """Verify --no-include-statefulsets sets the flag to False."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--no-include-statefulsets",
+            ]
+        )
+
+        assert args.include_statefulsets is False
+
+    def test_parse_args_include_daemonsets_flag(self) -> None:
+        """Verify --include-daemonsets sets the flag to True."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--include-daemonsets",
+            ]
+        )
+
+        assert args.include_daemonsets is True
+
+    def test_parse_args_no_include_daemonsets_flag(self) -> None:
+        """Verify --no-include-daemonsets sets the flag to False."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--no-include-daemonsets",
+            ]
+        )
+
+        assert args.include_daemonsets is False
+
+    def test_parse_args_include_jobs_flag(self) -> None:
+        """Verify --include-jobs sets the flag to True."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--include-jobs",
+            ]
+        )
+
+        assert args.include_jobs is True
+
+    def test_parse_args_no_include_jobs_flag(self) -> None:
+        """Verify --no-include-jobs sets the flag to False."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--no-include-jobs",
+            ]
+        )
+
+        assert args.include_jobs is False
+
+    def test_parse_args_required_workloads(self) -> None:
+        """Verify --required-workloads stores the raw comma-separated string."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--required-workloads",
+                "frontend, api",
+            ]
+        )
+
+        assert args.required_workloads == "frontend, api"
+
+    def test_parse_args_skip_containers(self) -> None:
+        """Verify --skip-containers stores the raw comma-separated string."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--skip-containers",
+                "redis, sidecar",
+            ]
+        )
+
+        assert args.skip_containers == "redis, sidecar"
+
+
+# ---------------------------------------------------------------------------
+# run_verification tests (dry-run and timeout)
+# ---------------------------------------------------------------------------
+
+
+class TestRunVerification:
+    """Tests for ``run_verification`` execution flow."""
+
+    def test_dry_run_passes_when_all_versions_match(self) -> None:
+        """Verify --dry-run exits with 0 when all versions match and workloads are stable."""
+        args = argparse.Namespace(
+            manifest='{"backend": "v1.2.3"}',
+            context="test-context",
+            gke_project=None,
+            namespace="default",
+            anchor="my-app",
+            timeout=300,
+            restart_threshold=3,
+            min_uptime=0,
+            allow_zero_replicas=False,
+            dry_run=True,
+            include_statefulsets=False,
+            include_daemonsets=False,
+            include_jobs=False,
+            required_workloads=None,
+            skip_containers=None,
+        )
+
+        mock_controller = MagicMock()
+        mock_discovery = MagicMock()
+        mock_auditor = MagicMock()
+
+        # Build a mock pod with the expected image
+        mock_pod = MagicMock()
+        mock_pod.metadata.name = "backend-pod-xyz"
+        mock_pod.metadata.namespace = "default"
+        mock_pod.metadata.labels = {"app": "backend", "pod-template-hash": "abc12"}
+        mock_pod.metadata.deletion_timestamp = None
+        mock_pod.spec.node_name = "node-1"
+        mock_pod.spec.containers = [MagicMock(image="registry.example.com/org/my-app/backend:v1.2.3")]
+        mock_pod.spec.init_containers = None
+        mock_pod.status.phase = "Running"
+        mock_pod.status.pod_ip = "10.0.0.1"
+        mock_pod.status.start_time = "2025-01-01T00:00:00Z"
+
+        from kubernify.models import RevisionInfo, StabilityAuditResult, WorkloadInspectionResult
+
+        workload = WorkloadInspectionResult(
+            name="backend-deployment",
+            type="Deployment",
+            namespace="default",
+            latest_revision=RevisionInfo(hash="abc12"),
+            pods=[mock_pod],
+            pod_spec=mock_pod.spec,
+        )
+
+        mock_discovery.discover_cluster_state.return_value = ([workload], [])
+        mock_auditor.audit_workload.return_value = StabilityAuditResult(
+            converged=True,
+            revision_consistent=True,
+            pods_healthy=True,
+            scheduling_complete=True,
+            job_complete=True,
+            errors=[],
+        )
+
+        with (
+            patch("kubernify.cli.KubernetesController", return_value=mock_controller),
+            patch("kubernify.cli.WorkloadDiscovery", return_value=mock_discovery),
+            patch("kubernify.cli.StabilityAuditor", return_value=mock_auditor),
+        ):
+            exit_code = run_verification(args=args)
+
+        assert exit_code == 0
+
+    def test_dry_run_fails_on_version_mismatch(self) -> None:
+        """Verify --dry-run exits with 1 when a version mismatch is detected."""
+        args = argparse.Namespace(
+            manifest='{"backend": "v2.0.0"}',
+            context="test-context",
+            gke_project=None,
+            namespace="default",
+            anchor="my-app",
+            timeout=300,
+            restart_threshold=3,
+            min_uptime=0,
+            allow_zero_replicas=False,
+            dry_run=True,
+            include_statefulsets=False,
+            include_daemonsets=False,
+            include_jobs=False,
+            required_workloads=None,
+            skip_containers=None,
+        )
+
+        mock_controller = MagicMock()
+        mock_discovery = MagicMock()
+        mock_auditor = MagicMock()
+
+        mock_pod = MagicMock()
+        mock_pod.metadata.name = "backend-pod-xyz"
+        mock_pod.metadata.namespace = "default"
+        mock_pod.metadata.labels = {"app": "backend", "pod-template-hash": "abc12"}
+        mock_pod.metadata.deletion_timestamp = None
+        mock_pod.spec.node_name = "node-1"
+        mock_pod.spec.containers = [MagicMock(image="registry.example.com/org/my-app/backend:v1.2.3")]
+        mock_pod.spec.init_containers = None
+        mock_pod.status.phase = "Running"
+        mock_pod.status.pod_ip = "10.0.0.1"
+        mock_pod.status.start_time = "2025-01-01T00:00:00Z"
+
+        from kubernify.models import RevisionInfo, StabilityAuditResult, WorkloadInspectionResult
+
+        workload = WorkloadInspectionResult(
+            name="backend-deployment",
+            type="Deployment",
+            namespace="default",
+            latest_revision=RevisionInfo(hash="abc12"),
+            pods=[mock_pod],
+            pod_spec=mock_pod.spec,
+        )
+
+        mock_discovery.discover_cluster_state.return_value = ([workload], [])
+        mock_auditor.audit_workload.return_value = StabilityAuditResult(
+            converged=True,
+            revision_consistent=True,
+            pods_healthy=True,
+            scheduling_complete=True,
+            job_complete=True,
+            errors=[],
+        )
+
+        with (
+            patch("kubernify.cli.KubernetesController", return_value=mock_controller),
+            patch("kubernify.cli.WorkloadDiscovery", return_value=mock_discovery),
+            patch("kubernify.cli.StabilityAuditor", return_value=mock_auditor),
+        ):
+            exit_code = run_verification(args=args)
+
+        assert exit_code == 1
+
+    def test_timeout_returns_exit_code_2(self) -> None:
+        """Verify run_verification returns exit code 2 when timeout is exceeded."""
+        args = argparse.Namespace(
+            manifest='{"backend": "v1.2.3"}',
+            context="test-context",
+            gke_project=None,
+            namespace="default",
+            anchor="my-app",
+            timeout=5,
+            restart_threshold=3,
+            min_uptime=0,
+            allow_zero_replicas=False,
+            dry_run=False,
+            include_statefulsets=False,
+            include_daemonsets=False,
+            include_jobs=False,
+            required_workloads=None,
+            skip_containers=None,
+        )
+
+        mock_controller = MagicMock()
+        mock_discovery = MagicMock()
+        mock_auditor = MagicMock()
+
+        # First call returns start_time=0, second call returns past-timeout value.
+        # Use a counter so that the logging module's internal time.time() calls
+        # (which also hit this mock) always get a valid numeric value.
+        call_count = 0
+
+        def _fake_time() -> float:
+            nonlocal call_count
+            call_count += 1
+            # First call is start_time (returns 0), all subsequent return 100
+            # which exceeds the 5-second timeout.
+            if call_count == 1:
+                return 0.0
+            return 100.0
+
+        with (
+            patch("kubernify.cli.KubernetesController", return_value=mock_controller),
+            patch("kubernify.cli.WorkloadDiscovery", return_value=mock_discovery),
+            patch("kubernify.cli.StabilityAuditor", return_value=mock_auditor),
+            patch("kubernify.cli.time.time", side_effect=_fake_time),
+        ):
+            exit_code = run_verification(args=args)
+
+        assert exit_code == 2
