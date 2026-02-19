@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kubernify"
+dynamic = ["version"]
+description = "Verify Kubernetes deployments match a version manifest with deep stability auditing. Checks convergence, revision consistency, and pod health."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+keywords = ["kubernetes", "k8s", "deployment", "verification", "version", "devops"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Software Development :: Testing",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "kubernetes>=28.1.0",
+]
+
+[project.scripts]
+kubernify = "kubernify.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/gs202/Kubernify"
+Documentation = "https://github.com/gs202/Kubernify#readme"
+Issues = "https://github.com/gs202/Kubernify/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.8.0",
+    "mypy>=1.0",
+    "pre-commit>=3.0",
+    "detect-secrets>=1.4",
+]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/kubernify/_version.py"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = ["src/kubernify/_version.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "S", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["kubernify"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
