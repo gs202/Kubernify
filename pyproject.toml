@@ -8,6 +8,9 @@ dynamic = ["version"]
 description = "Verify Kubernetes deployments match a version manifest with deep stability auditing. Checks convergence, revision consistency, and pod health."
 readme = "README.md"
 license = { text = "Apache-2.0" }
+authors = [
+  { name = "gs202", email = "gs202@users.noreply.github.com" }
+]
 requires-python = ">=3.10"
 keywords = ["kubernetes", "k8s", "deployment", "verification", "version", "devops"]
 classifiers = [

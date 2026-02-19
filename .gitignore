@@ -208,3 +208,6 @@ __marimo__/
 
 # hatch-vcs auto-generated version file
 src/kubernify/_version.py
+
+# Internal plans
+plans/
