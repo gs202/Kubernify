@@ -34,6 +34,9 @@ class WorkloadType(str, Enum):
     JOB = "Job"
     CRON_JOB = "CronJob"
 
+    def __str__(self) -> str:
+        return self.value
+
 
 class ContainerType(str, Enum):
     """Classification of a container within a pod spec."""
