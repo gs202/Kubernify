@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from kubernetes.client import (
@@ -320,3 +321,152 @@ class TestVerifyJobStatus:
 
         assert len(errors) >= 1
         assert any("not succeeded" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Min uptime tests
+# ---------------------------------------------------------------------------
+
+
+class TestCheckPodHealthMinUptime:
+    """Tests for ``check_pod_health`` with ``min_uptime_sec`` parameter."""
+
+    def test_pod_below_min_uptime_returns_error(self) -> None:
+        """Verify pod with uptime below min_uptime_sec returns an uptime error."""
+        auditor = _make_auditor()
+        # Pod started 10 seconds ago, but we require 120 seconds
+        recent_start = datetime.now(timezone.utc) - timedelta(seconds=10)
+        pod = V1Pod(
+            metadata=V1ObjectMeta(
+                name="young-pod",
+                labels={},
+                deletion_timestamp=None,
+            ),
+            spec=V1PodSpec(containers=[]),
+            status=V1PodStatus(
+                phase="Running",
+                start_time=recent_start,
+                conditions=[
+                    V1PodCondition(type="Ready", status="True"),
+                ],
+                container_statuses=[
+                    V1ContainerStatus(
+                        name="main",
+                        ready=True,
+                        restart_count=0,
+                        image="registry.example.com/my-org/my-app/backend:v1.0.0",
+                        image_id="sha256:abc",
+                        state=MagicMock(waiting=None),
+                    ),
+                ],
+            ),
+        )
+
+        errors = auditor.check_pod_health(pod=pod, restart_threshold=3, min_uptime_sec=120)
+
+        assert len(errors) >= 1
+        assert any("uptime" in e for e in errors)
+
+    def test_pod_above_min_uptime_returns_no_error(self) -> None:
+        """Verify pod with uptime above min_uptime_sec returns no uptime error."""
+        auditor = _make_auditor()
+        # Pod started 300 seconds ago, we require 120 seconds
+        old_start = datetime.now(timezone.utc) - timedelta(seconds=300)
+        pod = V1Pod(
+            metadata=V1ObjectMeta(
+                name="old-pod",
+                labels={},
+                deletion_timestamp=None,
+            ),
+            spec=V1PodSpec(containers=[]),
+            status=V1PodStatus(
+                phase="Running",
+                start_time=old_start,
+                conditions=[
+                    V1PodCondition(type="Ready", status="True"),
+                ],
+                container_statuses=[
+                    V1ContainerStatus(
+                        name="main",
+                        ready=True,
+                        restart_count=0,
+                        image="registry.example.com/my-org/my-app/backend:v1.0.0",
+                        image_id="sha256:abc",
+                        state=MagicMock(waiting=None),
+                    ),
+                ],
+            ),
+        )
+
+        errors = auditor.check_pod_health(pod=pod, restart_threshold=3, min_uptime_sec=120)
+
+        assert errors == []
+
+    def test_pod_no_start_time_returns_error(self) -> None:
+        """Verify pod with no start_time returns error when min_uptime_sec > 0."""
+        auditor = _make_auditor()
+        pod = V1Pod(
+            metadata=V1ObjectMeta(
+                name="no-start-pod",
+                labels={},
+                deletion_timestamp=None,
+            ),
+            spec=V1PodSpec(containers=[]),
+            status=V1PodStatus(
+                phase="Pending",
+                start_time=None,
+                conditions=[
+                    V1PodCondition(type="Ready", status="True"),
+                ],
+                container_statuses=[
+                    V1ContainerStatus(
+                        name="main",
+                        ready=True,
+                        restart_count=0,
+                        image="registry.example.com/my-org/my-app/backend:v1.0.0",
+                        image_id="sha256:abc",
+                        state=MagicMock(waiting=None),
+                    ),
+                ],
+            ),
+        )
+
+        errors = auditor.check_pod_health(pod=pod, restart_threshold=3, min_uptime_sec=60)
+
+        assert len(errors) >= 1
+        assert any("not started" in e for e in errors)
+
+    def test_min_uptime_zero_skips_check(self) -> None:
+        """Verify min_uptime_sec=0 does not perform uptime check."""
+        auditor = _make_auditor()
+        # Pod started 1 second ago — would fail with min_uptime > 0
+        recent_start = datetime.now(timezone.utc) - timedelta(seconds=1)
+        pod = V1Pod(
+            metadata=V1ObjectMeta(
+                name="fresh-pod",
+                labels={},
+                deletion_timestamp=None,
+            ),
+            spec=V1PodSpec(containers=[]),
+            status=V1PodStatus(
+                phase="Running",
+                start_time=recent_start,
+                conditions=[
+                    V1PodCondition(type="Ready", status="True"),
+                ],
+                container_statuses=[
+                    V1ContainerStatus(
+                        name="main",
+                        ready=True,
+                        restart_count=0,
+                        image="registry.example.com/my-org/my-app/backend:v1.0.0",
+                        image_id="sha256:abc",
+                        state=MagicMock(waiting=None),
+                    ),
+                ],
+            ),
+        )
+
+        errors = auditor.check_pod_health(pod=pod, restart_threshold=3, min_uptime_sec=0)
+
+        assert errors == []

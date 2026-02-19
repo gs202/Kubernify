@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from kubernify.models import (
     ComponentMapEntry,
     ContainerType,
@@ -117,10 +119,7 @@ class TestStabilityAuditResult:
 class TestWorkloadType:
     """Tests for ``WorkloadType`` enum string values."""
 
-    def test_workload_type_enum_values(self) -> None:
-        """Verify enum string values match Kubernetes resource kinds."""
-        assert WorkloadType.DEPLOYMENT == "Deployment"
-        assert WorkloadType.STATEFUL_SET == "StatefulSet"
-        assert WorkloadType.DAEMON_SET == "DaemonSet"
-        assert WorkloadType.JOB == "Job"
-        assert WorkloadType.CRON_JOB == "CronJob"
+    @pytest.mark.parametrize("member", list(WorkloadType))
+    def test_workload_type_str_matches_value(self, member: WorkloadType) -> None:
+        """Verify str(member) returns the Kubernetes resource kind string."""
+        assert str(member) == member.value

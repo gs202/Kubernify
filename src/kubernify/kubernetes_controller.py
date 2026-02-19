@@ -78,6 +78,24 @@ class KubernetesController:
         # Initialize the client immediately
         self._initialize_client()
 
+    @property
+    def core_v1(self) -> kubernetes.client.CoreV1Api:
+        if self._core_v1 is None:
+            raise RuntimeError("Kubernetes client not initialized")
+        return self._core_v1
+
+    @property
+    def apps_v1(self) -> kubernetes.client.AppsV1Api:
+        if self._apps_v1 is None:
+            raise RuntimeError("Kubernetes client not initialized")
+        return self._apps_v1
+
+    @property
+    def batch_v1(self) -> kubernetes.client.BatchV1Api:
+        if self._batch_v1 is None:
+            raise RuntimeError("Kubernetes client not initialized")
+        return self._batch_v1
+
     # ------------------------------------------------------------------
     # Client initialisation
     # ------------------------------------------------------------------
@@ -188,12 +206,12 @@ class KubernetesController:
             ) from e
 
         for ctx in contexts:
-            ctx_name = ctx.get("name", "")
+            ctx_name = str(ctx.get("name", ""))
             if ctx_name.startswith("gke_"):
                 parts = ctx_name.split("_")
                 if len(parts) > 1 and self._gke_project == parts[1]:
                     return ctx_name
-            elif self._gke_project in ctx_name:
+            elif self._gke_project and self._gke_project in ctx_name:
                 return ctx_name
 
         raise KubernetesControllerException(
@@ -298,7 +316,10 @@ class KubernetesController:
         match_labels = self._extract_match_labels(workload.spec.selector, f"{workload_label} {workload_name}")
         label_selector = self._labels_to_selector(match_labels)
         return self._list_pods_with_selector(
-            namespace=namespace, label_selector=label_selector, limit=limit, timeout=timeout,
+            namespace=namespace,
+            label_selector=label_selector,
+            limit=limit,
+            timeout=timeout,
         )
 
     # ------------------------------------------------------------------
@@ -308,18 +329,27 @@ class KubernetesController:
     def get_deployments(self, namespace: str | None = None) -> dict[str, V1Deployment]:
         """Fetch all Deployments in the given namespace or cluster-wide."""
         return self._list_workloads(
-            self._apps_v1.list_namespaced_deployment,
-            self._apps_v1.list_deployment_for_all_namespaces,
+            self.apps_v1.list_namespaced_deployment,
+            self.apps_v1.list_deployment_for_all_namespaces,
             namespace,
             "Deployments",
         )
 
     def list_pods_by_deployment(
-        self, deployment_name: str, namespace: str, limit: int = 100, timeout: int = 30,
+        self,
+        deployment_name: str,
+        namespace: str,
+        limit: int = 100,
+        timeout: int = 30,
     ) -> list[V1Pod]:
         """Return all Pods managed by the given Deployment."""
         return self._list_pods_by_workload(
-            self._apps_v1.read_namespaced_deployment, deployment_name, namespace, "Deployment", limit, timeout,
+            self.apps_v1.read_namespaced_deployment,
+            deployment_name,
+            namespace,
+            "Deployment",
+            limit,
+            timeout,
         )
 
     def get_deployment_latest_revision_info(self, deployment_name: str, namespace: str) -> RevisionInfo:
@@ -333,7 +363,7 @@ class KubernetesController:
             ``RevisionInfo`` populated with the latest ReplicaSet hash and revision number.
         """
         try:
-            replica_sets = self._apps_v1.list_namespaced_replica_set(namespace=namespace).items
+            replica_sets = self.apps_v1.list_namespaced_replica_set(namespace=namespace).items
         except Exception as e:
             self.logger.warning(f"Failed to list replica sets for {deployment_name}: {e}")
             return RevisionInfo()
@@ -341,9 +371,8 @@ class KubernetesController:
         latest_rs = None
         for rs in replica_sets:
             owners = rs.metadata.owner_references or []
-            if (
-                any(owner.kind == WorkloadType.DEPLOYMENT and owner.name == deployment_name for owner in owners)
-                and (latest_rs is None or rs.metadata.creation_timestamp > latest_rs.metadata.creation_timestamp)
+            if any(owner.kind == WorkloadType.DEPLOYMENT and owner.name == deployment_name for owner in owners) and (
+                latest_rs is None or rs.metadata.creation_timestamp > latest_rs.metadata.creation_timestamp
             ):
                 latest_rs = rs
 
@@ -363,18 +392,27 @@ class KubernetesController:
     def get_stateful_sets(self, namespace: str | None = None) -> dict[str, V1StatefulSet]:
         """Fetch all StatefulSets in the given namespace or cluster-wide."""
         return self._list_workloads(
-            self._apps_v1.list_namespaced_stateful_set,
-            self._apps_v1.list_stateful_set_for_all_namespaces,
+            self.apps_v1.list_namespaced_stateful_set,
+            self.apps_v1.list_stateful_set_for_all_namespaces,
             namespace,
             "StatefulSets",
         )
 
     def list_pods_by_stateful_set(
-        self, stateful_set_name: str, namespace: str, limit: int = 100, timeout: int = 30,
+        self,
+        stateful_set_name: str,
+        namespace: str,
+        limit: int = 100,
+        timeout: int = 30,
     ) -> list[V1Pod]:
         """Return all Pods managed by the given StatefulSet."""
         return self._list_pods_by_workload(
-            self._apps_v1.read_namespaced_stateful_set, stateful_set_name, namespace, "StatefulSet", limit, timeout,
+            self.apps_v1.read_namespaced_stateful_set,
+            stateful_set_name,
+            namespace,
+            "StatefulSet",
+            limit,
+            timeout,
         )
 
     def get_stateful_set_latest_revision_info(self, stateful_set_name: str, namespace: str) -> RevisionInfo:
@@ -388,7 +426,7 @@ class KubernetesController:
             ``RevisionInfo`` populated with update/current revision hashes, partition, and strategy.
         """
         try:
-            sts = self._apps_v1.read_namespaced_stateful_set(name=stateful_set_name, namespace=namespace)
+            sts = self.apps_v1.read_namespaced_stateful_set(name=stateful_set_name, namespace=namespace)
         except Exception as e:
             self.logger.warning(f"Failed to read StatefulSet {stateful_set_name} for revision info: {e}")
             return RevisionInfo()
@@ -415,18 +453,27 @@ class KubernetesController:
     def get_daemon_sets(self, namespace: str | None = None) -> dict[str, V1DaemonSet]:
         """Fetch all DaemonSets in the given namespace or cluster-wide."""
         return self._list_workloads(
-            self._apps_v1.list_namespaced_daemon_set,
-            self._apps_v1.list_daemon_set_for_all_namespaces,
+            self.apps_v1.list_namespaced_daemon_set,
+            self.apps_v1.list_daemon_set_for_all_namespaces,
             namespace,
             "DaemonSets",
         )
 
     def list_pods_by_daemon_set(
-        self, daemon_set_name: str, namespace: str, limit: int = 100, timeout: int = 30,
+        self,
+        daemon_set_name: str,
+        namespace: str,
+        limit: int = 100,
+        timeout: int = 30,
     ) -> list[V1Pod]:
         """List pods managed by a DaemonSet."""
         return self._list_pods_by_workload(
-            self._apps_v1.read_namespaced_daemon_set, daemon_set_name, namespace, "DaemonSet", limit, timeout,
+            self.apps_v1.read_namespaced_daemon_set,
+            daemon_set_name,
+            namespace,
+            "DaemonSet",
+            limit,
+            timeout,
         )
 
     # ------------------------------------------------------------------
@@ -436,8 +483,8 @@ class KubernetesController:
     def get_jobs(self, namespace: str | None = None) -> dict[str, V1Job]:
         """Fetch all Jobs in the given namespace or cluster-wide."""
         return self._list_workloads(
-            self._batch_v1.list_namespaced_job,
-            self._batch_v1.list_job_for_all_namespaces,
+            self.batch_v1.list_namespaced_job,
+            self.batch_v1.list_job_for_all_namespaces,
             namespace,
             "Jobs",
         )
@@ -445,8 +492,8 @@ class KubernetesController:
     def get_cron_jobs(self, namespace: str | None = None) -> dict[str, V1CronJob]:
         """Fetch all CronJobs in the given namespace or cluster-wide."""
         return self._list_workloads(
-            self._batch_v1.list_namespaced_cron_job,
-            self._batch_v1.list_cron_job_for_all_namespaces,
+            self.batch_v1.list_namespaced_cron_job,
+            self.batch_v1.list_cron_job_for_all_namespaces,
             namespace,
             "CronJobs",
         )
@@ -458,7 +505,7 @@ class KubernetesController:
         ``controller-uid`` from the Job's own labels.
         """
         try:
-            job = self._batch_v1.read_namespaced_job(name=job_name, namespace=namespace)
+            job = self.batch_v1.read_namespaced_job(name=job_name, namespace=namespace)
         except Exception as e:
             raise KubernetesControllerException(f"Could not read Job {job_name}: {e}") from e
 
@@ -472,7 +519,10 @@ class KubernetesController:
 
         label_selector = self._labels_to_selector(match_labels)
         return self._list_pods_with_selector(
-            namespace=namespace, label_selector=label_selector, limit=limit, timeout=timeout,
+            namespace=namespace,
+            label_selector=label_selector,
+            limit=limit,
+            timeout=timeout,
         )
 
     # ------------------------------------------------------------------
@@ -497,8 +547,11 @@ class KubernetesController:
 
         while time.time() - start < timeout:
             try:
-                ret = self._core_v1.list_namespaced_pod(
-                    namespace=namespace, label_selector=label_selector, _continue=_continue, limit=limit,
+                ret = self.core_v1.list_namespaced_pod(
+                    namespace=namespace,
+                    label_selector=label_selector,
+                    _continue=_continue,
+                    limit=limit,
                 )
                 pods.extend(ret.items)
                 _continue = ret.metadata._continue

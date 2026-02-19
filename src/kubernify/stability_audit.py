@@ -28,13 +28,13 @@ class StabilityAuditor:
     @staticmethod
     def check_controller_convergence(workload: KubernetesWorkload) -> bool:
         """Checks if observedGeneration >= generation."""
-        if not hasattr(workload, 'metadata') or not hasattr(workload.metadata, 'generation'):
+        if not hasattr(workload, "metadata") or not hasattr(workload.metadata, "generation"):
             return True
-        if not hasattr(workload, 'status') or workload.status is None:
+        if not hasattr(workload, "status") or workload.status is None:
             return False
-        if not hasattr(workload.status, 'observed_generation') or workload.status.observed_generation is None:
+        if not hasattr(workload.status, "observed_generation") or workload.status.observed_generation is None:
             return False
-        return workload.status.observed_generation >= workload.metadata.generation
+        return bool(workload.status.observed_generation >= workload.metadata.generation)
 
     @staticmethod
     def check_revision_consistency(pods: list[V1Pod], expected_revision_hash: str, workload_type: str) -> list[str]:
@@ -47,9 +47,9 @@ class StabilityAuditor:
             labels = pod.metadata.labels or {}
             actual_hash = None
             if workload_type == WorkloadType.DEPLOYMENT:
-                actual_hash = labels.get('pod-template-hash')
+                actual_hash = labels.get("pod-template-hash")
             elif workload_type in [WorkloadType.STATEFUL_SET, WorkloadType.DAEMON_SET]:
-                actual_hash = labels.get('controller-revision-hash')
+                actual_hash = labels.get("controller-revision-hash")
 
             if (
                 workload_type in [WorkloadType.DEPLOYMENT, WorkloadType.STATEFUL_SET, WorkloadType.DAEMON_SET]
@@ -68,16 +68,16 @@ class StabilityAuditor:
         if pod.metadata.deletion_timestamp is not None:
             return [f"Pod {pod_name} is terminating"]
 
-        ready_cond = next((c for c in (pod.status.conditions or []) if c.type == 'Ready'), None)
-        if not ready_cond or ready_cond.status != 'True':
+        ready_cond = next((c for c in (pod.status.conditions or []) if c.type == "Ready"), None)
+        if not ready_cond or ready_cond.status != "True":
             errors.append(f"Pod {pod_name} is not Ready")
 
-        for status in (pod.status.container_statuses or []):
+        for status in pod.status.container_statuses or []:
             if status.restart_count >= restart_threshold:
                 errors.append(f"Container {status.name} in pod {pod_name} has {status.restart_count} restarts")
             if status.state and status.state.waiting:
                 reason = status.state.waiting.reason
-                if reason in ['ImagePullBackOff', 'ErrImagePull', 'CrashLoopBackOff']:
+                if reason in ["ImagePullBackOff", "ErrImagePull", "CrashLoopBackOff"]:
                     errors.append(f"Container {status.name} in pod {pod_name} is in {reason}")
 
         if min_uptime_sec > 0:
@@ -134,15 +134,15 @@ class StabilityAuditor:
         """Helper to fetch the actual Kubernetes object."""
         try:
             if workload_type == WorkloadType.DEPLOYMENT:
-                return self.k8s_controller._apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+                return self.k8s_controller.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
             elif workload_type == WorkloadType.STATEFUL_SET:
-                return self.k8s_controller._apps_v1.read_namespaced_stateful_set(name=name, namespace=namespace)
+                return self.k8s_controller.apps_v1.read_namespaced_stateful_set(name=name, namespace=namespace)
             elif workload_type == WorkloadType.DAEMON_SET:
-                return self.k8s_controller._apps_v1.read_namespaced_daemon_set(name=name, namespace=namespace)
+                return self.k8s_controller.apps_v1.read_namespaced_daemon_set(name=name, namespace=namespace)
             elif workload_type == WorkloadType.JOB:
-                return self.k8s_controller._batch_v1.read_namespaced_job(name=name, namespace=namespace)
+                return self.k8s_controller.batch_v1.read_namespaced_job(name=name, namespace=namespace)
             elif workload_type == WorkloadType.CRON_JOB:
-                return self.k8s_controller._batch_v1.read_namespaced_cron_job(name=name, namespace=namespace)
+                return self.k8s_controller.batch_v1.read_namespaced_cron_job(name=name, namespace=namespace)
         except Exception as e:
             self.logger.warning(f"Failed to fetch {workload_type} {name}: {e}")
         return None
@@ -192,7 +192,9 @@ class StabilityAuditor:
         if w_type in [WorkloadType.DEPLOYMENT, WorkloadType.STATEFUL_SET, WorkloadType.DAEMON_SET]:
             if latest_revision and latest_revision.hash:
                 rev_errors = self.check_revision_consistency(
-                    pods=pods, expected_revision_hash=latest_revision.hash, workload_type=w_type,
+                    pods=pods,
+                    expected_revision_hash=latest_revision.hash,
+                    workload_type=w_type,
                 )
                 if not rev_errors:
                     result.revision_consistent = True

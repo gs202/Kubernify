@@ -20,6 +20,7 @@ import time
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime, timezone
+from typing import Any
 
 from .image_parser import parse_image_reference
 from .kubernetes_controller import KubernetesController
@@ -64,7 +65,7 @@ def _get_current_namespace() -> str:
     try:
         _, active_context = kubernetes.config.list_kube_config_contexts()
         if ns := active_context.get("context", {}).get("namespace"):
-            return ns
+            return str(ns)
     except Exception:  # noqa: S110
         pass
 
@@ -83,9 +84,10 @@ def _get_current_namespace() -> str:
 # Container extraction helpers
 # ---------------------------------------------------------------------------
 
+
 def _containers_from_spec(
-    init_containers: list | None,
-    app_containers: list | None,
+    init_containers: list[Any] | None,
+    app_containers: list[Any] | None,
     pod_info: PodInfo | None,
 ) -> list[tuple[str, ContainerType, PodInfo | None]]:
     """Yield ``(image, container_type, pod_info)`` tuples from container lists.
@@ -146,6 +148,7 @@ def _extract_containers(workload: WorkloadInspectionResult) -> list[tuple[str, C
 # Component map construction
 # ---------------------------------------------------------------------------
 
+
 def _build_or_update_entry(
     component_map: dict[str, list[ComponentMapEntry]],
     component: str,
@@ -192,7 +195,7 @@ def _build_or_update_entry(
                 workload_type=workload_type,
                 container_name=parsed.component,
                 container_type=container_type,
-                actual_version=parsed.version,
+                actual_version=parsed.version or "latest",
                 pods=[pod_info] if pod_info else [],
             )
         )
@@ -271,6 +274,7 @@ def construct_component_map(
 # Validation helpers
 # ---------------------------------------------------------------------------
 
+
 def validate_manifest(manifest: dict[str, str], component_map: dict[str, list[ComponentMapEntry]]) -> list[str]:
     """Validate that all components in the manifest exist in the cluster.
 
@@ -312,6 +316,7 @@ def verify_required_workloads(
 # ---------------------------------------------------------------------------
 # Version verification
 # ---------------------------------------------------------------------------
+
 
 def _verify_component_entry(
     entry: ComponentMapEntry,
@@ -417,7 +422,10 @@ def load_manifest(manifest: str) -> dict[str, str]:
     if not manifest:
         raise ValueError("Manifest JSON string must not be empty")
     try:
-        return json.loads(manifest)
+        data = json.loads(manifest)
+        if not isinstance(data, dict):
+            raise ValueError("Manifest must be a JSON object")
+        return {str(k): str(v) for k, v in data.items()}
     except json.JSONDecodeError as exc:
         raise ValueError(f"Manifest is not valid JSON: {manifest}") from exc
 
@@ -425,6 +433,7 @@ def load_manifest(manifest: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
+
 
 def generate_report(
     overall_status: VerificationStatus,
@@ -518,6 +527,7 @@ def generate_report(
 # CLI argument parsing
 # ---------------------------------------------------------------------------
 
+
 def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     """Parse command line arguments.
 
@@ -545,7 +555,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--manifest",
         required=True,
-        help="JSON string containing the version manifest (e.g. '{\"backend\": \"v1.2.3\"}')",
+        help='JSON string containing the version manifest (e.g. \'{"backend": "v1.2.3"}\')',
     )
     parser.add_argument(
         "--namespace",
@@ -614,6 +624,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 # Stability audit orchestration
 # ---------------------------------------------------------------------------
+
 
 def _parse_comma_list(raw: str | None) -> list[str]:
     """Parse a comma-separated string into a stripped list, or return empty list.
@@ -704,6 +715,7 @@ def _perform_stability_audit(
 # Main execution
 # ---------------------------------------------------------------------------
 
+
 def run_verification(args: argparse.Namespace) -> int:
     """Main execution flow.
 
@@ -759,7 +771,8 @@ def run_verification(args: argparse.Namespace) -> int:
         logger.info("Discovering cluster state...")
         try:
             discovered_items, skipped_workload_names = discovery.discover_cluster_state(
-                namespace=args.namespace, skip_patterns=skip_containers,
+                namespace=args.namespace,
+                skip_patterns=skip_containers,
             )
             discovered_map = {f"{item.type}/{item.name}": item for item in discovered_items}
             component_map = construct_component_map(
@@ -777,10 +790,13 @@ def run_verification(args: argparse.Namespace) -> int:
 
         missing_components = validate_manifest(manifest=manifest, component_map=component_map)
         missing_workloads = verify_required_workloads(
-            required_workloads=required_workloads, discovered_workloads=discovered_items,
+            required_workloads=required_workloads,
+            discovered_workloads=discovered_items,
         )
         verification_results = verify_versions(
-            manifest=manifest, component_map=component_map, allow_zero_replicas=args.allow_zero_replicas,
+            manifest=manifest,
+            component_map=component_map,
+            allow_zero_replicas=args.allow_zero_replicas,
         )
 
         stability_results, all_stable = _perform_stability_audit(

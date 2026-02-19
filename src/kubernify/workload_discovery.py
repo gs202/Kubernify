@@ -28,7 +28,7 @@ class WorkloadDiscovery:
         k8s_controller: KubernetesController,
         include_statefulsets: bool = True,
         include_daemonsets: bool = True,
-        include_jobs: bool = True
+        include_jobs: bool = True,
     ) -> None:
         self.logger = logging.getLogger(__name__)
         self.k8s_controller = k8s_controller
@@ -83,7 +83,7 @@ class WorkloadDiscovery:
     def inspect_workload(
         self,
         workload_name: str,
-        workload_type: str,
+        workload_type: WorkloadType,
         namespace: str,
         workload_obj: KubernetesWorkload | None = None,
     ) -> WorkloadInspectionResult:
@@ -126,17 +126,20 @@ class WorkloadDiscovery:
     def _get_daemonset_revision(self, workload_name: str, namespace: str) -> RevisionInfo | None:
         """Helper to extract DaemonSet revision from pod template labels."""
         try:
-            ds = self.k8s_controller._apps_v1.read_namespaced_daemon_set(name=workload_name, namespace=namespace)
+            ds = self.k8s_controller.apps_v1.read_namespaced_daemon_set(name=workload_name, namespace=namespace)
             labels = ds.spec.template.metadata.labels or {}
-            revision_hash = labels.get('controller-revision-hash', '')
+            revision_hash = labels.get("controller-revision-hash", "")
             if revision_hash:
                 return RevisionInfo(hash=revision_hash)
             self.logger.warning(f"DaemonSet {workload_name} pod template has no 'controller-revision-hash' label")
         except Exception as e:
             self.logger.warning(f"Failed to get DaemonSet revision for {workload_name}: {e}")
+        return None
 
     def discover_cluster_state(
-        self, namespace: str, skip_patterns: list[str] | None = None,
+        self,
+        namespace: str,
+        skip_patterns: list[str] | None = None,
     ) -> tuple[list[WorkloadInspectionResult], list[str]]:
         """Orchestrates the discovery of all workloads and their details.
 
@@ -163,12 +166,14 @@ class WorkloadDiscovery:
                     self.logger.info(f"Skipping inspection of workload {workload_name} (matched skip pattern)")
                     skipped_workloads.append(workload_name)
                     continue
-                tasks.append({
-                    "workload_name": workload_name,
-                    "workload_type": workload_type,
-                    "namespace": namespace,
-                    "workload_obj": workload
-                })
+                tasks.append(
+                    {
+                        "workload_name": workload_name,
+                        "workload_type": workload_type,
+                        "namespace": namespace,
+                        "workload_obj": workload,
+                    }
+                )
 
         total_workloads = len(tasks)
         with concurrent.futures.ThreadPoolExecutor(max_workers=DEFAULT_THREAD_POOL_WORKERS) as executor:
@@ -184,14 +189,16 @@ class WorkloadDiscovery:
                 except Exception as e:
                     self.logger.error(f"Failed to inspect workload {workload_name}: {e}")
                     # Add a partial result to indicate failure
-                    inspection_results.append(WorkloadInspectionResult(
-                        name=workload_name,
-                        type=task["workload_type"],
-                        namespace=namespace,
-                        latest_revision=None,
-                        pods=[],
-                        pod_spec=None,
-                        error=str(e)
-                    ))
+                    inspection_results.append(
+                        WorkloadInspectionResult(
+                            name=workload_name,
+                            type=task["workload_type"],
+                            namespace=namespace,
+                            latest_revision=None,
+                            pods=[],
+                            pod_spec=None,
+                            error=str(e),
+                        )
+                    )
 
         return inspection_results, skipped_workloads

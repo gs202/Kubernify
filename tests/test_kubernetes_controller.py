@@ -71,9 +71,7 @@ class TestKubernetesControllerInit:
 
         controller = KubernetesController(gke_project="my-gcp-project")
 
-        mock_load_kube_config.assert_called_once_with(
-            context="gke_my-gcp-project_us-central1_cluster-1"
-        )
+        mock_load_kube_config.assert_called_once_with(context="gke_my-gcp-project_us-central1_cluster-1")
         assert controller._gke_project == "my-gcp-project"
 
     def test_init_both_context_and_gke_project_raises(self) -> None:
@@ -150,9 +148,7 @@ class TestGetKubeContext:
         _controller = KubernetesController(gke_project="target-project")
 
         # The constructor calls get_kube_context internally and loads the resolved context
-        mock_load_kube_config.assert_called_with(
-            context="gke_target-project_us-central1_cluster-1"
-        )
+        mock_load_kube_config.assert_called_with(context="gke_target-project_us-central1_cluster-1")
 
     @patch("kubernify.kubernetes_controller.kubernetes.client.BatchV1Api")
     @patch("kubernify.kubernetes_controller.kubernetes.client.AppsV1Api")
