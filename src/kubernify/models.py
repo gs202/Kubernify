@@ -16,17 +16,13 @@ KubernetesWorkload: TypeAlias = V1Deployment | V1StatefulSet | V1DaemonSet | V1J
 # ---------------------------------------------------------------------------
 # Constants — replace magic numbers scattered across modules
 # ---------------------------------------------------------------------------
-DEFAULT_RESTART_THRESHOLD: int = 3
-"""Maximum acceptable container restart count before flagging instability."""
+DEFAULT_RESTART_THRESHOLD: int = 3  # Maximum acceptable container restart count before flagging instability.
 
-DEFAULT_TIMEOUT_SECONDS: int = 300
-"""Global timeout for the verification loop (5 minutes)."""
+DEFAULT_TIMEOUT_SECONDS: int = 300  # Global timeout for the verification loop (5 minutes).
 
-DEFAULT_THREAD_POOL_WORKERS: int = 40
-"""Thread-pool size for concurrent workload inspection."""
+DEFAULT_THREAD_POOL_WORKERS: int = 40  # Thread-pool size for concurrent workload inspection.
 
-RETRY_INTERVAL_SECONDS: int = 10
-"""Seconds to sleep between verification/discovery retry iterations."""
+RETRY_INTERVAL_SECONDS: int = 10  # Seconds to sleep between verification/discovery retry iterations.
 
 
 class WorkloadType(str, Enum):

@@ -34,7 +34,7 @@ class StabilityAuditor:
             return False
         if not hasattr(workload.status, "observed_generation") or workload.status.observed_generation is None:
             return False
-        return workload.status.observed_generation >= workload.metadata.generation
+        return bool(workload.status.observed_generation >= workload.metadata.generation)
 
     @staticmethod
     def check_revision_consistency(pods: list[V1Pod], expected_revision_hash: str, workload_type: str) -> list[str]:
@@ -134,15 +134,15 @@ class StabilityAuditor:
         """Helper to fetch the actual Kubernetes object."""
         try:
             if workload_type == WorkloadType.DEPLOYMENT:
-                return self.k8s_controller._apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+                return self.k8s_controller.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
             elif workload_type == WorkloadType.STATEFUL_SET:
-                return self.k8s_controller._apps_v1.read_namespaced_stateful_set(name=name, namespace=namespace)
+                return self.k8s_controller.apps_v1.read_namespaced_stateful_set(name=name, namespace=namespace)
             elif workload_type == WorkloadType.DAEMON_SET:
-                return self.k8s_controller._apps_v1.read_namespaced_daemon_set(name=name, namespace=namespace)
+                return self.k8s_controller.apps_v1.read_namespaced_daemon_set(name=name, namespace=namespace)
             elif workload_type == WorkloadType.JOB:
-                return self.k8s_controller._batch_v1.read_namespaced_job(name=name, namespace=namespace)
+                return self.k8s_controller.batch_v1.read_namespaced_job(name=name, namespace=namespace)
             elif workload_type == WorkloadType.CRON_JOB:
-                return self.k8s_controller._batch_v1.read_namespaced_cron_job(name=name, namespace=namespace)
+                return self.k8s_controller.batch_v1.read_namespaced_cron_job(name=name, namespace=namespace)
         except Exception as e:
             self.logger.warning(f"Failed to fetch {workload_type} {name}: {e}")
         return None

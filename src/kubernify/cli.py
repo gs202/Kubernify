@@ -20,6 +20,7 @@ import time
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime, timezone
+from typing import Any
 
 from .image_parser import parse_image_reference
 from .kubernetes_controller import KubernetesController
@@ -64,7 +65,7 @@ def _get_current_namespace() -> str:
     try:
         _, active_context = kubernetes.config.list_kube_config_contexts()
         if ns := active_context.get("context", {}).get("namespace"):
-            return ns
+            return str(ns)
     except Exception:  # noqa: S110
         pass
 
@@ -85,8 +86,8 @@ def _get_current_namespace() -> str:
 
 
 def _containers_from_spec(
-    init_containers: list | None,
-    app_containers: list | None,
+    init_containers: list[Any] | None,
+    app_containers: list[Any] | None,
     pod_info: PodInfo | None,
 ) -> list[tuple[str, ContainerType, PodInfo | None]]:
     """Yield ``(image, container_type, pod_info)`` tuples from container lists.
@@ -194,7 +195,7 @@ def _build_or_update_entry(
                 workload_type=workload_type,
                 container_name=parsed.component,
                 container_type=container_type,
-                actual_version=parsed.version,
+                actual_version=parsed.version or "latest",
                 pods=[pod_info] if pod_info else [],
             )
         )
@@ -421,7 +422,10 @@ def load_manifest(manifest: str) -> dict[str, str]:
     if not manifest:
         raise ValueError("Manifest JSON string must not be empty")
     try:
-        return json.loads(manifest)
+        data = json.loads(manifest)
+        if not isinstance(data, dict):
+            raise ValueError("Manifest must be a JSON object")
+        return {str(k): str(v) for k, v in data.items()}
     except json.JSONDecodeError as exc:
         raise ValueError(f"Manifest is not valid JSON: {manifest}") from exc
 
