@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,7 +25,7 @@ from kubernify.models import RevisionInfo, WorkloadInspectionResult
 
 
 @pytest.fixture()
-def mock_k8s_client() -> MagicMock:
+def mock_k8s_client() -> Generator[MagicMock, None, None]:
     """Patch kubernetes.client API classes and return a mock bundle.
 
     Returns:

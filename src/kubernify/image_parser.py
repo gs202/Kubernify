@@ -10,11 +10,13 @@ from __future__ import annotations
 from .models import ImageReference
 
 # Docker Hub host aliases that should be normalized
-_DOCKER_HUB_HOSTS: frozenset[str] = frozenset({
-    "docker.io",
-    "index.docker.io",
-    "registry-1.docker.io",
-})
+_DOCKER_HUB_HOSTS: frozenset[str] = frozenset(
+    {
+        "docker.io",
+        "index.docker.io",
+        "registry-1.docker.io",
+    }
+)
 
 _DOCKER_HUB_CANONICAL: str = "docker.io"
 
@@ -48,7 +50,7 @@ def parse_image_reference(image: str, repository_anchor: str) -> ImageReference:
     # Step 1: Strip any @-suffix (e.g. pinned hash) before parsing
     working = image
     if "@" in working:
-        working = working[:working.index("@")]
+        working = working[: working.index("@")]
 
     # Step 2: Extract tag from the last path segment
     segments = working.split("/")
@@ -79,7 +81,7 @@ def parse_image_reference(image: str, repository_anchor: str) -> ImageReference:
 
     try:
         anchor_index = path_segments.index(repository_anchor)
-        component_segments = path_segments[anchor_index + 1:]
+        component_segments = path_segments[anchor_index + 1 :]
 
         if not component_segments:
             # Anchor is the last segment — use it as component (edge case)

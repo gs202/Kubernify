@@ -14,6 +14,7 @@ from kubernify.image_parser import parse_image_reference
 # Standard anchored image patterns (from specification table)
 # ---------------------------------------------------------------------------
 
+
 class TestAnchoredImages:
     """Tests for standard anchored repository image references."""
 
@@ -108,6 +109,7 @@ class TestAnchoredImages:
 # Docker Hub images (fallback behavior — no anchor match)
 # ---------------------------------------------------------------------------
 
+
 class TestDockerHubImages:
     """Tests for Docker Hub image references with various formats."""
 
@@ -158,6 +160,7 @@ class TestDockerHubImages:
 # Non-Docker-Hub third-party registries
 # ---------------------------------------------------------------------------
 
+
 class TestThirdPartyRegistries:
     """Tests for non-Docker-Hub registry image references."""
 
@@ -174,6 +177,7 @@ class TestThirdPartyRegistries:
 # ---------------------------------------------------------------------------
 # @-suffix stripping (e.g. pinned hashes)
 # ---------------------------------------------------------------------------
+
 
 class TestAtSuffixStripping:
     """Tests that @-suffixes are stripped before parsing."""
@@ -205,6 +209,7 @@ class TestAtSuffixStripping:
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestEdgeCases:
     """Tests for edge cases and boundary conditions."""
