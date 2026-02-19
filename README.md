@@ -1,7 +1,7 @@
 # kubernify
 
-[![PyPI version](https://img.shields.io/pypi/v/kubernify.svg)](https://pypi.org/project/kubernify/)
-[![Python versions](https://img.shields.io/pypi/pyversions/kubernify.svg)](https://pypi.org/project/kubernify/)
+[![PyPI version](https://img.shields.io/pypi/v/kubernify?color=%2334D058&label=pypi%20package)](https://pypi.org/project/kubernify/)
+[![Python versions](https://img.shields.io/pypi/pyversions/kubernify?color=%2334D058)](https://pypi.org/project/kubernify/)
 [![CI](https://github.com/gs202/Kubernify/actions/workflows/ci.yml/badge.svg)](https://github.com/gs202/Kubernify/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
