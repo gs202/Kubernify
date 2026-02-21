@@ -201,10 +201,8 @@ if results.errors:
 kubernify uses a **repository-relative anchor** to extract component names from container image paths. The `--anchor` argument specifies the path segment after which the component name is derived.
 
 ```
-Image: registry.example.com/my-org/my-app/backend:v1.2.3
-       └─ registry ──────────┘└─ org ┘└anchor┘└component┘
-                                                ↓
-                                    --anchor my-app → component = "backend"
+Image: registry.example.com/my-org-foo/my-app-bar/backend:v1.2.3-x
+       └──── registry ─────┘ └─ org ─┘ └ anchor ┘└ comp.┘└─ tag ─┘
 ```
 
 **More examples:**
