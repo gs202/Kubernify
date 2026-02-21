@@ -11,13 +11,13 @@ Verify Kubernetes deployments match a version manifest with deep stability audit
 
 ## Features
 
-- **Manifest-driven verification** — Provide a JSON manifest of expected versions; kubernify verifies the cluster matches
-- **Deep stability auditing** — Goes beyond version checks: convergence, revision consistency, pod health, DaemonSet scheduling, Job completion
-- **Retry-until-converged loop** — Waits for rollouts to complete rather than just snapshot-checking
-- **Repository-relative image parsing** — Flexible component name extraction from any image registry format
-- **Comprehensive workload support** — Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs
-- **Zero-replica awareness** — Verifies version from PodSpec even when HPA/KEDA has scaled to zero
-- **Structured JSON reports** — Machine-readable output for CI/CD pipeline integration
+- **Manifest-driven verification** - Provide a JSON manifest of expected versions; kubernify verifies the cluster matches
+- **Deep stability auditing** - Goes beyond version checks: convergence, revision consistency, pod health, DaemonSet scheduling, Job completion
+- **Retry-until-converged loop** - Waits for rollouts to complete rather than just snapshot-checking
+- **Repository-relative image parsing** - Flexible component name extraction from any image registry format
+- **Comprehensive workload support** - Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs
+- **Zero-replica awareness** - Verifies version from PodSpec even when HPA/KEDA has scaled to zero
+- **Structured JSON reports** - Machine-readable output for CI/CD pipeline integration
 
 ---
 
@@ -63,14 +63,14 @@ kubernify [OPTIONS]
 ```
 
 | Argument | Description | Default |
-|----------|-------------|---------|
+|----------|-------------|-----|
 | `--context` | Kubeconfig context name. Mutually exclusive with `--gke-project`. | From kubeconfig |
-| `--gke-project` | GCP project ID for GKE context resolution. Mutually exclusive with `--context`. | — |
-| `--anchor` | **(required)** Image path anchor for component name extraction. See [How Image Anchor Works](#how-image-anchor-works). | — |
-| `--manifest` | **(required)** JSON version manifest, e.g. `'{"backend": "v1.2.3"}'`. | — |
+| `--gke-project` | GCP project ID for GKE context resolution. Mutually exclusive with `--context`. |  |
+| `--anchor` | **(required)** Image path anchor for component name extraction. See [How Image Anchor Works](#how-image-anchor-works). |  |
+| `--manifest` | **(required)** JSON version manifest, e.g. `'{"backend": "v1.2.3"}'`. |  |
 | `--namespace` | Kubernetes namespace to verify. | From kubeconfig context |
-| `--required-workloads` | Comma-separated workload name patterns that must exist. | — |
-| `--skip-containers` | Comma-separated container name patterns to skip during verification. | — |
+| `--required-workloads` | Comma-separated workload name patterns that must exist. |  |
+| `--skip-containers` | Comma-separated container name patterns to skip during verification. |  |
 | `--min-uptime` | Minimum pod uptime in seconds for stability checks. | `0` |
 | `--restart-threshold` | Maximum allowed container restart count. | `3` |
 | `--timeout` | Global timeout in seconds for the verification loop. | `300` |
@@ -84,7 +84,7 @@ kubernify [OPTIONS]
 
 ## Usage Examples
 
-### Basic Usage — Direct Kubeconfig Context
+### Basic Usage - Direct Kubeconfig Context
 
 ```bash
 kubernify \
@@ -94,7 +94,7 @@ kubernify \
   --manifest '{"backend": "v1.2.3", "frontend": "v1.2.4"}'
 ```
 
-### GKE Shorthand — Resolve Context from GCP Project
+### GKE Shorthand - Resolve Context from GCP Project
 
 ```bash
 kubernify \
@@ -104,7 +104,7 @@ kubernify \
   --manifest '{"backend": "v1.2.3", "frontend": "v1.2.4"}'
 ```
 
-### In-Cluster — Running Inside a Kubernetes Pod
+### In-Cluster - Running Inside a Kubernetes Pod
 
 ```bash
 # No --context needed; auto-detects in-cluster config and namespace
@@ -113,7 +113,7 @@ kubernify \
   --manifest '{"backend": "v1.2.3", "frontend": "v1.2.4"}'
 ```
 
-### Full-Featured — All Options
+### Full-Featured - All Options
 
 ```bash
 kubernify \
@@ -132,7 +132,7 @@ kubernify \
   --allow-zero-replicas
 ```
 
-### Dry Run — Snapshot Check Without Waiting
+### Dry Run - Snapshot Check Without Waiting
 
 ```bash
 kubernify \
@@ -142,7 +142,7 @@ kubernify \
   --dry-run
 ```
 
-### CI/CD Integration — GitHub Actions
+### CI/CD Integration - GitHub Actions
 
 ```yaml
 jobs:
@@ -219,38 +219,6 @@ The extracted component name is then matched against the keys in your `--manifes
 
 ---
 
-## Architecture
-
-```mermaid
-graph TD
-    A[CLI Entry Point] --> B[Argument Parser]
-    B --> C{Context Mode}
-    C -->|--context| D[Direct kubeconfig context]
-    C -->|--gke-project| E[GKE context resolver]
-    C -->|neither| F[In-cluster or default kubeconfig]
-    D --> G[KubernetesController]
-    E --> G
-    F --> G
-    G --> H[WorkloadDiscovery]
-    H --> I[Fetch Deployments/StatefulSets/DaemonSets/Jobs]
-    H --> J[Inspect Workloads - concurrent]
-    J --> K[Image Parser]
-    K --> L[Component Map Construction]
-    L --> M[Version Verification]
-    J --> N[StabilityAuditor]
-    N --> O[Convergence Check]
-    N --> P[Revision Consistency]
-    N --> Q[Pod Health]
-    N --> R[DaemonSet Scheduling]
-    N --> S[Job Completion]
-    M --> T[Report Generator]
-    N --> T
-    T --> U[JSON Report Output]
-    U --> V{Exit Code}
-    V -->|0| W[PASS]
-    V -->|1| X[FAIL]
-    V -->|2| Y[TIMEOUT]
-```
 
 ---
 
@@ -331,4 +299,4 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for dev
 
 ## License
 
-This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
