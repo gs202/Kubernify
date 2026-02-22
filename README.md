@@ -72,7 +72,7 @@ kubernify [OPTIONS]
 | `--required-workloads` | Comma-separated workload name patterns that must exist. |  |
 | `--skip-containers` | Comma-separated container name patterns to skip during verification. |  |
 | `--min-uptime` | Minimum pod uptime in seconds for stability checks. | `0` |
-| `--restart-threshold` | Maximum allowed container restart count. | `3` |
+| `--restart-threshold` | Maximum acceptable container restart count. Use `0` to forbid any restarts, or `-1` to skip the restart check entirely. | `3` |
 | `--timeout` | Global timeout in seconds for the verification loop. | `300` |
 | `--allow-zero-replicas` | Allow workloads with zero replicas to pass verification. | `false` |
 | `--dry-run` | Snapshot check without waiting for convergence. | `false` |

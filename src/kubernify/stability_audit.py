@@ -61,7 +61,17 @@ class StabilityAuditor:
 
     @staticmethod
     def check_pod_health(pod: V1Pod, restart_threshold: int = 3, min_uptime_sec: int = 0) -> list[str]:
-        """Checks pod health (Ready, not terminating, restarts, uptime)."""
+        """Checks pod health (Ready, not terminating, restarts, uptime).
+
+        Args:
+            pod: The Kubernetes pod to check.
+            restart_threshold: Maximum acceptable restart count per container.
+                Use ``0`` to forbid any restarts, or ``-1`` to skip the restart check entirely.
+            min_uptime_sec: Minimum pod uptime in seconds.
+
+        Returns:
+            A list of error strings (empty when the pod is healthy).
+        """
         errors = []
         pod_name = pod.metadata.name
 
@@ -73,7 +83,7 @@ class StabilityAuditor:
             errors.append(f"Pod {pod_name} is not Ready")
 
         for status in pod.status.container_statuses or []:
-            if status.restart_count >= restart_threshold:
+            if restart_threshold >= 0 and status.restart_count > restart_threshold:
                 errors.append(f"Container {status.name} in pod {pod_name} has {status.restart_count} restarts")
             if status.state and status.state.waiting:
                 reason = status.state.waiting.reason
@@ -158,6 +168,7 @@ class StabilityAuditor:
         Args:
             workload_info: Inspection result containing workload metadata and pods.
             restart_threshold: Maximum acceptable restart count per container.
+                Use ``0`` to forbid any restarts, or ``-1`` to skip the restart check entirely.
             min_uptime_sec: Minimum pod uptime in seconds.
 
         Returns:
