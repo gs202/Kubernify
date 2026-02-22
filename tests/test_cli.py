@@ -12,6 +12,8 @@ from kubernify.cli import (
     _get_current_namespace,
     _parse_comma_list,
     _setup_logging,
+    build_reverse_alias_map,
+    load_component_aliases,
     load_manifest,
     parse_args,
     run_verification,
@@ -478,6 +480,7 @@ class TestRunVerification:
             include_jobs=False,
             required_workloads=None,
             skip_containers=None,
+            component_aliases=None,
         )
 
         mock_controller = MagicMock()
@@ -545,6 +548,7 @@ class TestRunVerification:
             include_jobs=False,
             required_workloads=None,
             skip_containers=None,
+            component_aliases=None,
         )
 
         mock_controller = MagicMock()
@@ -611,6 +615,7 @@ class TestRunVerification:
             include_jobs=False,
             required_workloads=None,
             skip_containers=None,
+            component_aliases=None,
         )
 
         mock_controller = MagicMock()
@@ -640,3 +645,131 @@ class TestRunVerification:
             exit_code = run_verification(args=args)
 
         assert exit_code == 2
+
+
+# ---------------------------------------------------------------------------
+# Component aliases tests
+# ---------------------------------------------------------------------------
+
+
+class TestLoadComponentAliases:
+    """Tests for ``load_component_aliases``."""
+
+    def test_none_returns_empty_dict(self) -> None:
+        """Verify None input returns empty dict."""
+        result = load_component_aliases(None)
+
+        assert result == {}
+
+    def test_empty_string_returns_empty_dict(self) -> None:
+        """Verify empty string returns empty dict."""
+        result = load_component_aliases("")
+
+        assert result == {}
+
+    def test_valid_json_parsed(self) -> None:
+        """Verify valid JSON string is parsed into a dict."""
+        result = load_component_aliases('{"foo": "bar-baz"}')
+
+        assert result == {"foo": "bar-baz"}
+
+    def test_multiple_aliases(self) -> None:
+        """Verify multiple aliases are parsed correctly."""
+        result = load_component_aliases('{"foo": "bar-baz", "my-comp": "server"}')
+
+        assert result == {"foo": "bar-baz", "my-comp": "server"}
+
+    def test_invalid_json_raises_value_error(self) -> None:
+        """Verify invalid JSON raises ValueError."""
+        with pytest.raises(ValueError, match="not valid JSON"):
+            load_component_aliases("{invalid json}")
+
+    def test_non_object_json_raises_value_error(self) -> None:
+        """Verify non-object JSON raises ValueError."""
+        with pytest.raises(ValueError, match="must be a JSON object"):
+            load_component_aliases('["foo", "bar-baz"]')
+
+    def test_values_coerced_to_strings(self) -> None:
+        """Verify non-string keys and values are coerced to strings."""
+        result = load_component_aliases('{"foo": 123}')
+
+        assert result == {"foo": "123"}
+
+
+class TestBuildReverseAliasMap:
+    """Tests for ``build_reverse_alias_map``."""
+
+    def test_basic_reverse_mapping(self) -> None:
+        """Verify aliases are inverted correctly."""
+        aliases = {"foo": "bar-baz"}
+        manifest = {"foo": "v1.0.0", "backend": "v2.0.0"}
+
+        result = build_reverse_alias_map(aliases=aliases, manifest=manifest)
+
+        assert result == {"bar-baz": "foo"}
+
+    def test_multiple_aliases_reversed(self) -> None:
+        """Verify multiple aliases are all inverted."""
+        aliases = {"foo": "bar-baz", "my-comp": "server"}
+        manifest = {"foo": "v1.0.0", "my-comp": "v2.0.0"}
+
+        result = build_reverse_alias_map(aliases=aliases, manifest=manifest)
+
+        assert result == {"bar-baz": "foo", "server": "my-comp"}
+
+    def test_empty_aliases_returns_empty(self) -> None:
+        """Verify empty aliases returns empty dict."""
+        result = build_reverse_alias_map(aliases={}, manifest={"backend": "v1.0.0"})
+
+        assert result == {}
+
+    def test_duplicate_image_name_raises_value_error(self) -> None:
+        """Verify two manifest keys aliasing to the same image name raises ValueError."""
+        aliases = {"foo": "bar-baz", "foo2": "bar-baz"}
+        manifest = {"foo": "v1.0.0", "foo2": "v2.0.0"}
+
+        with pytest.raises(ValueError, match="Duplicate component alias"):
+            build_reverse_alias_map(aliases=aliases, manifest=manifest)
+
+    def test_alias_key_not_in_manifest_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Verify alias key not in manifest logs a warning but does not raise."""
+        aliases = {"nonexistent": "bar-baz"}
+        manifest = {"backend": "v1.0.0"}
+
+        with caplog.at_level(logging.WARNING):
+            result = build_reverse_alias_map(aliases=aliases, manifest=manifest)
+
+        assert result == {"bar-baz": "nonexistent"}
+        assert "not present in the manifest" in caplog.text
+
+
+class TestParseArgsComponentAliases:
+    """Tests for ``--component-aliases`` CLI argument parsing."""
+
+    def test_component_aliases_default_is_none(self) -> None:
+        """Verify --component-aliases defaults to None when not provided."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+            ]
+        )
+
+        assert args.component_aliases is None
+
+    def test_component_aliases_parsed(self) -> None:
+        """Verify --component-aliases is stored as the raw JSON string."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--component-aliases",
+                '{"foo": "bar-baz"}',
+            ]
+        )
+
+        assert args.component_aliases == '{"foo": "bar-baz"}'

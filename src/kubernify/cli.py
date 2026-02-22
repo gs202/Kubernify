@@ -225,6 +225,7 @@ def construct_component_map(
     manifest: dict[str, str],
     repository_anchor: str,
     skip_containers: list[str] | None = None,
+    reverse_aliases: dict[str, str] | None = None,
 ) -> dict[str, list[ComponentMapEntry]]:
     """Construct a map of components to their found workloads and versions.
 
@@ -237,12 +238,15 @@ def construct_component_map(
         repository_anchor: Repository name used as the anchor for image parsing.
         skip_containers: Optional list of patterns; workloads whose container name
             or workload name matches any pattern are excluded from the map entirely.
+        reverse_aliases: Optional mapping from image names to manifest component
+            names (e.g. ``{"foo": "bar"}``).  Built by ``build_reverse_alias_map()``.
 
     Returns:
         Dict mapping component names to lists of ``ComponentMapEntry`` instances.
     """
     component_map: dict[str, list[ComponentMapEntry]] = defaultdict(list)
     skip_patterns = skip_containers or []
+    alias_lookup = reverse_aliases or {}
 
     for workload in workloads:
         for image, container_type, pod_info in _extract_containers(workload=workload):
@@ -251,15 +255,20 @@ def construct_component_map(
             except ValueError:
                 continue
 
-            if parsed.component not in manifest:
+            # Apply alias resolution: remap image name → manifest component name
+            resolved_component = alias_lookup.get(parsed.component, parsed.component)
+
+            if resolved_component not in manifest:
                 continue
 
-            if _should_skip(skip_patterns=skip_patterns, container_name=parsed.component, workload_name=workload.name):
+            if _should_skip(
+                skip_patterns=skip_patterns, container_name=resolved_component, workload_name=workload.name
+            ):
                 continue
 
             _build_or_update_entry(
                 component_map=component_map,
-                component=parsed.component,
+                component=resolved_component,
                 workload_name=workload.name,
                 workload_type=workload.type,
                 parsed=parsed,
@@ -430,6 +439,63 @@ def load_manifest(manifest: str) -> dict[str, str]:
         raise ValueError(f"Manifest is not valid JSON: {manifest}") from exc
 
 
+def load_component_aliases(raw: str | None) -> dict[str, str]:
+    """Parse a JSON string of component aliases into a dict.
+
+    Args:
+        raw: JSON string mapping manifest component names to image names,
+            or ``None`` if no aliases are provided.
+
+    Returns:
+        Parsed dict mapping manifest keys to image names, or empty dict.
+
+    Raises:
+        ValueError: If the string is not valid JSON or not a JSON object.
+    """
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("Component aliases must be a JSON object")
+        return {str(k): str(v) for k, v in data.items()}
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Component aliases is not valid JSON: {raw}") from exc
+
+
+def build_reverse_alias_map(
+    aliases: dict[str, str],
+    manifest: dict[str, str],
+) -> dict[str, str]:
+    """Build a reverse lookup from image names to manifest component names.
+
+    Args:
+        aliases: Mapping of manifest component names to image names
+            (e.g. ``{"foo": "bar-baz"}``).
+        manifest: The version manifest for validation.
+
+    Returns:
+        Inverted mapping from image names to manifest keys
+        (e.g. ``{"baz-baz": "foo"}``).
+
+    Raises:
+        ValueError: If two manifest keys alias to the same image name.
+    """
+    reverse: dict[str, str] = {}
+    for manifest_key, image_name in aliases.items():
+        if manifest_key not in manifest:
+            logger.warning(
+                f"Component alias key '{manifest_key}' is not present in the manifest — this alias will have no effect"
+            )
+        if image_name in reverse:
+            raise ValueError(
+                f"Duplicate component alias: both '{reverse[image_name]}' and "
+                f"'{manifest_key}' map to image name '{image_name}'"
+            )
+        reverse[image_name] = manifest_key
+    return reverse
+
+
 # ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
@@ -556,6 +622,15 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--manifest",
         required=True,
         help='JSON string containing the version manifest (e.g. \'{"backend": "v1.2.3"}\')',
+    )
+    parser.add_argument(
+        "--component-aliases",
+        default=None,
+        help=(
+            "JSON string mapping manifest component names to their actual image names "
+            'when they differ. Example: \'{"foo": "bar-baz"}\' means the '
+            "manifest key 'foo' corresponds to the container image named 'bar-baz'."
+        ),
     )
     parser.add_argument(
         "--namespace",
@@ -734,6 +809,11 @@ def run_verification(args: argparse.Namespace) -> int:
     try:
         manifest = load_manifest(manifest=args.manifest)
 
+        component_aliases = load_component_aliases(args.component_aliases)
+        reverse_aliases = build_reverse_alias_map(aliases=component_aliases, manifest=manifest)
+        if component_aliases:
+            logger.info(f"Component aliases: {component_aliases}")
+
         required_workloads = _parse_comma_list(args.required_workloads)
         if required_workloads:
             logger.info(f"Required workloads: {required_workloads}")
@@ -784,6 +864,7 @@ def run_verification(args: argparse.Namespace) -> int:
                 manifest=manifest,
                 repository_anchor=args.anchor,
                 skip_containers=skip_containers,
+                reverse_aliases=reverse_aliases,
             )
         except Exception as e:
             logger.error(f"Discovery failed: {e}")

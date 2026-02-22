@@ -171,6 +171,71 @@ class TestConstructComponentMap:
         # redis is not in the manifest, so it should not appear
         assert "redis" not in result
 
+    def test_construct_component_map_with_alias(self) -> None:
+        """Verify alias remaps image name to manifest component name."""
+        manifest = {"foo": "v1.0.0"}
+        workloads = [
+            _make_workload_inspection(
+                name="foo-deployment",
+                image="registry.example.com/my-org/my-app/bar-baz:v1.0.0",
+            ),
+        ]
+
+        result = construct_component_map(
+            workloads=workloads,
+            manifest=manifest,
+            repository_anchor="my-app",
+            reverse_aliases={"bar-baz": "foo"},
+        )
+
+        assert "foo" in result
+        assert result["foo"][0].actual_version == "v1.0.0"
+
+    def test_construct_component_map_alias_does_not_affect_non_aliased(self) -> None:
+        """Verify non-aliased components still work alongside aliases."""
+        manifest = {"backend": "v1.2.3", "foo": "v1.0.0"}
+        workloads = [
+            _make_workload_inspection(
+                name="backend-deployment",
+                image="registry.example.com/my-org/my-app/backend:v1.2.3",
+            ),
+            _make_workload_inspection(
+                name="foo-deployment",
+                image="registry.example.com/my-org/my-app/bar-baz:v1.0.0",
+            ),
+        ]
+
+        result = construct_component_map(
+            workloads=workloads,
+            manifest=manifest,
+            repository_anchor="my-app",
+            reverse_aliases={"bar-baz": "foo"},
+        )
+
+        assert "backend" in result
+        assert "foo" in result
+        assert result["backend"][0].actual_version == "v1.2.3"
+        assert result["foo"][0].actual_version == "v1.0.0"
+
+    def test_construct_component_map_without_alias_misses_component(self) -> None:
+        """Verify that without alias, mismatched image name is not mapped."""
+        manifest = {"foo": "v1.0.0"}
+        workloads = [
+            _make_workload_inspection(
+                name="foo-deployment",
+                image="registry.example.com/my-org/my-app/bar-baz:v1.0.0",
+            ),
+        ]
+
+        result = construct_component_map(
+            workloads=workloads,
+            manifest=manifest,
+            repository_anchor="my-app",
+        )
+
+        # Without alias, bar-baz != foo, so it's not in the map
+        assert "foo" not in result
+
 
 # ---------------------------------------------------------------------------
 # verify_versions tests
