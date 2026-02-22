@@ -57,11 +57,11 @@ class TestAnchoredImages:
                 id="nested-plugins-hub",
             ),
             pytest.param(
-                "registry.example.com/my-org/my-app/agent-gateway:1.5.0",
-                "agent-gateway",
+                "registry.example.com/my-org/my-app/bar-baz:1.5.0",
+                "bar-baz",
                 None,
                 "1.5.0",
-                id="agent-gateway",
+                id="bar-baz",
             ),
             pytest.param(
                 "registry.example.com/my-org/my-app/analytics-rocksdb:2.0.1",
