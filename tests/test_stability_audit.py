@@ -232,6 +232,42 @@ class TestCheckPodHealth:
 
         assert any("restarts" in e for e in errors)
 
+    def test_check_pod_health_restarts_at_threshold_passes(self) -> None:
+        """Verify pod with restarts exactly at threshold is acceptable."""
+        auditor = _make_auditor()
+        pod = _make_pod(name="border-pod", ready=True, restart_count=3)
+
+        errors = auditor.check_pod_health(pod=pod, restart_threshold=3)
+
+        assert not any("restarts" in e for e in errors)
+
+    def test_check_pod_health_threshold_zero_no_restarts(self) -> None:
+        """Verify threshold=0 allows pods with zero restarts."""
+        auditor = _make_auditor()
+        pod = _make_pod(name="clean-pod", ready=True, restart_count=0)
+
+        errors = auditor.check_pod_health(pod=pod, restart_threshold=0)
+
+        assert errors == []
+
+    def test_check_pod_health_threshold_zero_with_restarts(self) -> None:
+        """Verify threshold=0 flags pods that have any restarts."""
+        auditor = _make_auditor()
+        pod = _make_pod(name="restarted-pod", ready=True, restart_count=1)
+
+        errors = auditor.check_pod_health(pod=pod, restart_threshold=0)
+
+        assert any("restarts" in e for e in errors)
+
+    def test_check_pod_health_threshold_negative_one_skips_check(self) -> None:
+        """Verify threshold=-1 disables the restart check entirely."""
+        auditor = _make_auditor()
+        pod = _make_pod(name="noisy-pod", ready=True, restart_count=100)
+
+        errors = auditor.check_pod_health(pod=pod, restart_threshold=-1)
+
+        assert not any("restarts" in e for e in errors)
+
 
 # ---------------------------------------------------------------------------
 # DaemonSet scheduling tests

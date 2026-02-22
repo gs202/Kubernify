@@ -578,7 +578,10 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--restart-threshold",
         type=int,
         default=DEFAULT_RESTART_THRESHOLD,
-        help="Maximum acceptable restart count per container",
+        help=(
+            "Maximum acceptable restart count per container. "
+            "Use 0 to forbid any restarts, or -1 to skip the restart check entirely"
+        ),
     )
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS, help="Global timeout in seconds")
     parser.add_argument(
@@ -660,6 +663,7 @@ def _perform_stability_audit(
         required_workloads: List of required workload names.
         skip_containers: List of container name patterns to skip.
         restart_threshold: Maximum acceptable restart count per container.
+            Use ``0`` to forbid any restarts, or ``-1`` to skip the restart check entirely.
         min_uptime: Minimum pod uptime in seconds.
 
     Returns:
