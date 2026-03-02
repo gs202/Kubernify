@@ -4,6 +4,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/kubernify?color=%2334D058)](https://pypi.org/project/kubernify/)
 [![CI](https://github.com/gs202/Kubernify/actions/workflows/ci.yml/badge.svg)](https://github.com/gs202/Kubernify/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Total Downloads](https://img.shields.io/pepy/dt/kubernify?color=%2334D058)](https://pepy.tech/project/kubernify)
 
 Verify Kubernetes deployments match a version manifest with deep stability auditing. Checks convergence, revision consistency, and pod health.
 
