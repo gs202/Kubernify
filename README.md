@@ -75,7 +75,8 @@ kubernify [OPTIONS]
 | `--min-uptime` | Minimum pod uptime in seconds for stability checks. | `0` |
 | `--restart-threshold` | Maximum acceptable container restart count. Use `0` to forbid any restarts, or `-1` to skip the restart check entirely. | `3` |
 | `--timeout` | Global timeout in seconds for the verification loop. | `300` |
-| `--allow-zero-replicas` | Allow workloads with zero replicas to pass verification. | `false` |
+| `--allow-zero-replicas` | Allow workloads with zero replicas to pass verification. Mutually exclusive with `--allow-zero-replicas-for`. | `false` |
+| `--allow-zero-replicas-for` | Comma-separated list of workload names allowed to have 0 replicas. Mutually exclusive with `--allow-zero-replicas`. |  |
 | `--dry-run` | Snapshot check without waiting for convergence. | `false` |
 | `--include-statefulsets` | Include StatefulSets in workload discovery. | `false` |
 | `--include-daemonsets` | Include DaemonSets in workload discovery. | `false` |
@@ -131,6 +132,8 @@ kubernify \
   --restart-threshold 5 \
   --timeout 600 \
   --allow-zero-replicas
+  # OR selectively:
+  # --allow-zero-replicas-for "worker, cron-handler"
 ```
 
 ### Dry Run - Snapshot Check Without Waiting
