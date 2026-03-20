@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2025-03-20
+
+### Added
+
+- `--allow-zero-replicas-for` CLI parameter to explicitly permit zero-replica workloads during verification
+
+### Changed
+
+- CI: use `pre-commit/action` for cached hook environments
+- CI: use `pytest-xdist` for parallel test execution
+- CI: switch Dependabot schedule from weekly to monthly
+
+## [1.0.2] - 2025-02-01
+
 ### Added
 
 - Initial public release of kubernify
