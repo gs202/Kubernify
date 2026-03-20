@@ -356,6 +356,143 @@ class TestVerifyVersions:
         assert len(result.errors) >= 1
         assert any("0 running pods" in e for e in result.errors)
 
+    def test_verify_versions_zero_replicas_for_named_workload_passes(self) -> None:
+        """Verify zero-replica workload passes when its name is in allow_zero_replicas_for."""
+        manifest = {"backend": "v1.2.3"}
+        component_map = {
+            "backend": [
+                ComponentMapEntry(
+                    workload_name="backend-deployment",
+                    workload_type="Deployment",
+                    container_name="backend",
+                    container_type=ContainerType.APP,
+                    actual_version="v1.2.3",
+                    pods=[],
+                ),
+            ],
+        }
+
+        result = verify_versions(
+            manifest=manifest,
+            component_map=component_map,
+            allow_zero_replicas=False,
+            allow_zero_replicas_for=["backend-deployment"],
+        )
+
+        assert result.errors == []
+
+    def test_verify_versions_zero_replicas_for_unlisted_workload_fails(self) -> None:
+        """Verify zero-replica workload fails when not in allow_zero_replicas_for list."""
+        manifest = {"backend": "v1.2.3"}
+        component_map = {
+            "backend": [
+                ComponentMapEntry(
+                    workload_name="backend-deployment",
+                    workload_type="Deployment",
+                    container_name="backend",
+                    container_type=ContainerType.APP,
+                    actual_version="v1.2.3",
+                    pods=[],
+                ),
+            ],
+        }
+
+        result = verify_versions(
+            manifest=manifest,
+            component_map=component_map,
+            allow_zero_replicas=False,
+            allow_zero_replicas_for=["other-deployment"],
+        )
+
+        assert len(result.errors) == 1
+        assert "0 running pods" in result.errors[0]
+
+    def test_verify_versions_zero_replicas_for_mixed_workloads(self) -> None:
+        """Verify only named workloads are exempted; others still fail."""
+        manifest = {"backend": "v1.2.3"}
+        component_map = {
+            "backend": [
+                ComponentMapEntry(
+                    workload_name="backend-deployment",
+                    workload_type="Deployment",
+                    container_name="backend",
+                    container_type=ContainerType.APP,
+                    actual_version="v1.2.3",
+                    pods=[],
+                ),
+                ComponentMapEntry(
+                    workload_name="backend-worker",
+                    workload_type="Deployment",
+                    container_name="backend",
+                    container_type=ContainerType.APP,
+                    actual_version="v1.2.3",
+                    pods=[],
+                ),
+            ],
+        }
+
+        result = verify_versions(
+            manifest=manifest,
+            component_map=component_map,
+            allow_zero_replicas=False,
+            allow_zero_replicas_for=["backend-deployment"],
+        )
+
+        assert len(result.errors) == 1
+        assert "backend-worker" in result.errors[0]
+
+    def test_verify_versions_zero_replicas_for_empty_list(self) -> None:
+        """Verify empty allow_zero_replicas_for list behaves like default (all fail)."""
+        manifest = {"backend": "v1.2.3"}
+        component_map = {
+            "backend": [
+                ComponentMapEntry(
+                    workload_name="backend-deployment",
+                    workload_type="Deployment",
+                    container_name="backend",
+                    container_type=ContainerType.APP,
+                    actual_version="v1.2.3",
+                    pods=[],
+                ),
+            ],
+        }
+
+        result = verify_versions(
+            manifest=manifest,
+            component_map=component_map,
+            allow_zero_replicas=False,
+            allow_zero_replicas_for=[],
+        )
+
+        assert len(result.errors) == 1
+        assert "0 running pods" in result.errors[0]
+
+    def test_verify_versions_zero_replicas_for_with_version_mismatch(self) -> None:
+        """Verify named workload with zero replicas but wrong version still fails on version mismatch."""
+        manifest = {"backend": "v2.0.0"}
+        component_map = {
+            "backend": [
+                ComponentMapEntry(
+                    workload_name="backend-deployment",
+                    workload_type="Deployment",
+                    container_name="backend",
+                    container_type=ContainerType.APP,
+                    actual_version="v1.2.3",
+                    pods=[],
+                ),
+            ],
+        }
+
+        result = verify_versions(
+            manifest=manifest,
+            component_map=component_map,
+            allow_zero_replicas=False,
+            allow_zero_replicas_for=["backend-deployment"],
+        )
+
+        assert len(result.errors) == 1
+        assert "mismatch" in result.errors[0].lower()
+
 
 # ---------------------------------------------------------------------------
 # validate_manifest tests

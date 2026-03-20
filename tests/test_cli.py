@@ -110,6 +110,7 @@ class TestParseArgs:
         assert args.restart_threshold == 3
         assert args.min_uptime == 0
         assert args.allow_zero_replicas is False
+        assert args.allow_zero_replicas_for is None
         assert args.dry_run is False
         assert args.include_statefulsets is False
         assert args.include_daemonsets is False
@@ -325,6 +326,64 @@ class TestParseArgsExplicitValues:
 
         assert args.allow_zero_replicas is True
 
+    def test_parse_args_allow_zero_replicas_for_default(self) -> None:
+        """Verify --allow-zero-replicas-for defaults to None when not provided."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+            ]
+        )
+
+        assert args.allow_zero_replicas_for is None
+
+    def test_parse_args_allow_zero_replicas_for_single(self) -> None:
+        """Verify --allow-zero-replicas-for stores a single workload name."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--allow-zero-replicas-for",
+                "api",
+            ]
+        )
+
+        assert args.allow_zero_replicas_for == "api"
+
+    def test_parse_args_allow_zero_replicas_for_multiple(self) -> None:
+        """Verify --allow-zero-replicas-for stores a comma-separated string."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--allow-zero-replicas-for",
+                "api,frontend,backend",
+            ]
+        )
+
+        assert args.allow_zero_replicas_for == "api,frontend,backend"
+
+    def test_parse_args_allow_zero_replicas_mutual_exclusion(self) -> None:
+        """Verify --allow-zero-replicas and --allow-zero-replicas-for are mutually exclusive."""
+        with pytest.raises(SystemExit):
+            parse_args(
+                [
+                    "--manifest",
+                    '{"backend": "v1.0.0"}',
+                    "--anchor",
+                    "my-app",
+                    "--allow-zero-replicas",
+                    "--allow-zero-replicas-for",
+                    "backend-deployment",
+                ]
+            )
+
     def test_parse_args_dry_run_flag(self) -> None:
         """Verify --dry-run sets the flag to True."""
         args = parse_args(
@@ -474,6 +533,7 @@ class TestRunVerification:
             restart_threshold=3,
             min_uptime=0,
             allow_zero_replicas=False,
+            allow_zero_replicas_for=None,
             dry_run=True,
             include_statefulsets=False,
             include_daemonsets=False,
@@ -542,6 +602,7 @@ class TestRunVerification:
             restart_threshold=3,
             min_uptime=0,
             allow_zero_replicas=False,
+            allow_zero_replicas_for=None,
             dry_run=True,
             include_statefulsets=False,
             include_daemonsets=False,
@@ -609,6 +670,7 @@ class TestRunVerification:
             restart_threshold=3,
             min_uptime=0,
             allow_zero_replicas=False,
+            allow_zero_replicas_for=None,
             dry_run=False,
             include_statefulsets=False,
             include_daemonsets=False,
@@ -645,6 +707,67 @@ class TestRunVerification:
             exit_code = run_verification(args=args)
 
         assert exit_code == 2
+
+    def test_dry_run_zero_replicas_for_named_workload_passes(self) -> None:
+        """Verify --dry-run with allow_zero_replicas_for passes for named zero-replica workload."""
+        args = argparse.Namespace(
+            manifest='{"backend": "v1.2.3"}',
+            context="test-context",
+            gke_project=None,
+            namespace="default",
+            anchor="my-app",
+            timeout=300,
+            restart_threshold=3,
+            min_uptime=0,
+            allow_zero_replicas=False,
+            allow_zero_replicas_for="backend-deployment",
+            dry_run=True,
+            include_statefulsets=False,
+            include_daemonsets=False,
+            include_jobs=False,
+            required_workloads=None,
+            skip_containers=None,
+            component_aliases=None,
+        )
+
+        mock_controller = MagicMock()
+        mock_discovery = MagicMock()
+        mock_auditor = MagicMock()
+
+        # Build a zero-replica workload (no running pods, only pod spec)
+        mock_pod_spec = MagicMock()
+        mock_pod_spec.containers = [MagicMock(image="registry.example.com/org/my-app/backend:v1.2.3")]
+        mock_pod_spec.init_containers = None
+
+        from kubernify.models import RevisionInfo, StabilityAuditResult, WorkloadInspectionResult
+
+        workload = WorkloadInspectionResult(
+            name="backend-deployment",
+            type="Deployment",
+            namespace="default",
+            latest_revision=RevisionInfo(hash="abc12"),
+            pods=[],
+            pod_spec=mock_pod_spec,
+        )
+
+        mock_discovery.discover_cluster_state.return_value = ([workload], [])
+        mock_auditor.audit_workload.return_value = StabilityAuditResult(
+            converged=True,
+            revision_consistent=True,
+            pods_healthy=True,
+            scheduling_complete=True,
+            job_complete=True,
+            errors=[],
+        )
+
+        with (
+            patch("kubernify.cli.KubernetesController", return_value=mock_controller),
+            patch("kubernify.cli.WorkloadDiscovery", return_value=mock_discovery),
+            patch("kubernify.cli.StabilityAuditor", return_value=mock_auditor),
+        ):
+            exit_code = run_verification(args=args)
+
+        assert exit_code == 0
 
 
 # ---------------------------------------------------------------------------
