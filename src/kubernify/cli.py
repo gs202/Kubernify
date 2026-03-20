@@ -348,10 +348,7 @@ def _verify_component_entry(
         ``VerificationResult`` containing verification status.
     """
     if not entry.pods:
-        workload_is_exempted = (
-            allow_zero_replicas
-            or entry.workload_name in allow_zero_replicas_for
-        )
+        workload_is_exempted = allow_zero_replicas or entry.workload_name in allow_zero_replicas_for
         if not workload_is_exempted:
             return VerificationResult(
                 workload=entry.workload_name,
