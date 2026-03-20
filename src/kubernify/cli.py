@@ -331,6 +331,7 @@ def _verify_component_entry(
     entry: ComponentMapEntry,
     expected_version: str,
     allow_zero_replicas: bool,
+    allow_zero_replicas_for: frozenset[str] = frozenset(),
 ) -> VerificationResult:
     """Verify a single workload entry against expected version and replica count.
 
@@ -341,18 +342,24 @@ def _verify_component_entry(
         entry: Workload entry containing container and version information.
         expected_version: Expected version string.
         allow_zero_replicas: When ``True``, do not fail workloads with 0 running pods.
+        allow_zero_replicas_for: Workload names selectively allowed to have 0 replicas.
 
     Returns:
         ``VerificationResult`` containing verification status.
     """
-    if not entry.pods and not allow_zero_replicas:
-        return VerificationResult(
-            workload=entry.workload_name,
-            type=entry.workload_type,
-            container=entry.container_name,
-            status=VerificationStatus.FAIL,
-            error=f"Workload has 0 running pods (version from pod spec: {entry.actual_version})",
+    if not entry.pods:
+        workload_is_exempted = (
+            allow_zero_replicas
+            or entry.workload_name in allow_zero_replicas_for
         )
+        if not workload_is_exempted:
+            return VerificationResult(
+                workload=entry.workload_name,
+                type=entry.workload_type,
+                container=entry.container_name,
+                status=VerificationStatus.FAIL,
+                error=f"Workload has 0 running pods (version from pod spec: {entry.actual_version})",
+            )
 
     if entry.actual_version != expected_version:
         return VerificationResult(
@@ -375,6 +382,7 @@ def verify_versions(
     manifest: dict[str, str],
     component_map: dict[str, list[ComponentMapEntry]],
     allow_zero_replicas: bool = False,
+    allow_zero_replicas_for: list[str] | None = None,
 ) -> VersionVerificationResults:
     """Verify versions for all components.
 
@@ -382,10 +390,13 @@ def verify_versions(
         manifest: Dict mapping component names to expected version strings.
         component_map: Dict mapping component names to their discovered workloads.
         allow_zero_replicas: When ``True``, do not fail workloads with 0 running pods.
+        allow_zero_replicas_for: Optional list of workload names selectively allowed
+            to have 0 replicas.
 
     Returns:
         A ``VersionVerificationResults`` instance with per-component details.
     """
+    _exempted_names: frozenset[str] = frozenset(allow_zero_replicas_for or ())
     results = VersionVerificationResults()
 
     for component, expected_version in manifest.items():
@@ -404,6 +415,7 @@ def verify_versions(
                 entry=entry,
                 expected_version=expected_version,
                 allow_zero_replicas=allow_zero_replicas,
+                allow_zero_replicas_for=_exempted_names,
             )
             comp_result.workloads.append(entry_status)
             if entry_status.status == VerificationStatus.FAIL:
@@ -659,10 +671,19 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS, help="Global timeout in seconds")
-    parser.add_argument(
+    zero_replica_group = parser.add_mutually_exclusive_group()
+    zero_replica_group.add_argument(
         "--allow-zero-replicas",
         action="store_true",
         help="Allow workloads with 0 replicas to pass verification without flagging as a failure",
+    )
+    zero_replica_group.add_argument(
+        "--allow-zero-replicas-for",
+        default=None,
+        help=(
+            "Comma-separated list of workload names allowed to have 0 replicas "
+            "(mutually exclusive with --allow-zero-replicas)"
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -822,6 +843,10 @@ def run_verification(args: argparse.Namespace) -> int:
         if skip_containers:
             logger.info(f"Skipping verification for patterns (container/workload name): {skip_containers}")
 
+        allow_zero_replicas_for = _parse_comma_list(args.allow_zero_replicas_for)
+        if allow_zero_replicas_for:
+            logger.info(f"Allowing zero replicas for workloads: {allow_zero_replicas_for}")
+
         k8s_controller = KubernetesController(
             context=args.context,
             gke_project=args.gke_project,
@@ -882,6 +907,7 @@ def run_verification(args: argparse.Namespace) -> int:
             manifest=manifest,
             component_map=component_map,
             allow_zero_replicas=args.allow_zero_replicas,
+            allow_zero_replicas_for=allow_zero_replicas_for,
         )
 
         stability_results, all_stable = _perform_stability_audit(
