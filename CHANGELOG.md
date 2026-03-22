@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-03-22
+
+### Changed
+
+- Expanded CLI argument descriptions in README with detailed behavioral documentation
+- Added missing `--component-aliases` argument to CLI reference table
+- Clarified substring vs exact matching semantics for `--required-workloads`, `--skip-containers`, and `--allow-zero-replicas-for`
+
 ## [1.0.3] - 2025-03-20
 
 ### Added
