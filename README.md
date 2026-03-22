@@ -64,23 +64,24 @@ kubernify [OPTIONS]
 ```
 
 | Argument | Description | Default |
-|----------|-------------|-----|
-| `--context` | Kubeconfig context name. Mutually exclusive with `--gke-project`. | From kubeconfig |
-| `--gke-project` | GCP project ID for GKE context resolution. Mutually exclusive with `--context`. |  |
-| `--anchor` | **(required)** Image path anchor for component name extraction. See [How Image Anchor Works](#how-image-anchor-works). |  |
-| `--manifest` | **(required)** JSON version manifest, e.g. `'{"backend": "v1.2.3"}'`. |  |
-| `--namespace` | Kubernetes namespace to verify. | From kubeconfig context |
-| `--required-workloads` | Comma-separated workload name patterns that must exist. |  |
-| `--skip-containers` | Comma-separated container name patterns to skip during verification. |  |
-| `--min-uptime` | Minimum pod uptime in seconds for stability checks. | `0` |
-| `--restart-threshold` | Maximum acceptable container restart count. Use `0` to forbid any restarts, or `-1` to skip the restart check entirely. | `3` |
-| `--timeout` | Global timeout in seconds for the verification loop. | `300` |
-| `--allow-zero-replicas` | Allow workloads with zero replicas to pass verification. Mutually exclusive with `--allow-zero-replicas-for`. | `false` |
-| `--allow-zero-replicas-for` | Comma-separated list of workload names allowed to have 0 replicas. Mutually exclusive with `--allow-zero-replicas`. |  |
-| `--dry-run` | Snapshot check without waiting for convergence. | `false` |
-| `--include-statefulsets` | Include StatefulSets in workload discovery. | `false` |
-| `--include-daemonsets` | Include DaemonSets in workload discovery. | `false` |
-| `--include-jobs` | Include Jobs and CronJobs in workload discovery. | `false` |
+|----------|-------------|---------|
+| `--context` | Kubeconfig context name to use for cluster connection. Mutually exclusive with `--gke-project`. When omitted, the active kubeconfig context is used automatically. | From kubeconfig |
+| `--gke-project` | GCP project ID — resolves the kube context from GKE-style context names (e.g., `gke_my-project_us-central1_cluster-name`). Mutually exclusive with `--context`. |  |
+| `--anchor` | **(required)** The image path segment used as the anchor point for component name extraction. For example, given image `registry.example.com/my-org/my-app/backend:v1.0`, using `--anchor my-app` extracts the component name `backend`. See [How Image Anchor Works](#how-image-anchor-works). |  |
+| `--manifest` | **(required)** JSON string containing the version manifest mapping component names to their expected versions, e.g. `'{"backend": "v1.2.3", "frontend": "v2.0.0"}'`. |  |
+| `--component-aliases` | JSON string mapping manifest component names to their actual image names when they differ. Example: `'{"foo": "bar-baz"}'` means the manifest key `foo` corresponds to the container image named `bar-baz`. |  |
+| `--namespace` | Kubernetes namespace to verify. Resolved automatically from kubeconfig context, in-cluster service account, or falls back to `default`. | From kubeconfig context |
+| `--required-workloads` | Comma-separated **substring** patterns for workloads that must exist in the namespace, **independent of the manifest**. Useful for ensuring critical workloads (e.g., infrastructure sidecars, operators) are present even if they aren't version-verified. Each pattern is matched against discovered workload names using substring containment (e.g., `frontend` matches `my-app-frontend`). Verification fails if any pattern has no match. |  |
+| `--skip-containers` | Comma-separated **substring** patterns to skip during verification. Each pattern is matched against both container names and workload names using substring containment (e.g., `backend` matches `my-app-backend`). Skipped workloads are excluded from both version verification and stability audits. |  |
+| `--min-uptime` | Minimum pod uptime in seconds for stability checks. Pods running for less than this duration are flagged as unstable. | `0` |
+| `--restart-threshold` | Maximum acceptable container restart count. Containers exceeding this threshold are flagged as unstable. Use `0` to forbid any restarts, or `-1` to skip the restart check entirely. | `3` |
+| `--timeout` | Global timeout in seconds for the verification loop. The tool retries discovery and verification until all checks pass or this timeout is reached. Returns exit code `2` on timeout. | `300` |
+| `--allow-zero-replicas` | Allow **all** workloads with zero running replicas to pass verification (version is still checked via the pod spec template). Mutually exclusive with `--allow-zero-replicas-for`. | `false` |
+| `--allow-zero-replicas-for` | Comma-separated list of **exact** workload names allowed to have 0 running replicas (e.g., `my-cronjob-worker,batch-processor`). Uses exact name matching, not substring. Mutually exclusive with `--allow-zero-replicas`. |  |
+| `--dry-run` | Perform a single snapshot check against the current cluster state without waiting for convergence. Exits immediately with pass/fail result. | `false` |
+| `--include-statefulsets` | Include StatefulSets in workload discovery. By default, only Deployments are inspected. | `false` |
+| `--include-daemonsets` | Include DaemonSets in workload discovery. By default, only Deployments are inspected. | `false` |
+| `--include-jobs` | Include Jobs and CronJobs in workload discovery. By default, only Deployments are inspected. | `false` |
 
 ---
 
