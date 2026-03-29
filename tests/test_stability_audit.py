@@ -21,6 +21,7 @@ from kubernetes.client import (
     V1PodStatus,
 )
 
+from kubernify.models import WorkloadInspectionResult
 from kubernify.stability_audit import StabilityAuditor
 
 # ---------------------------------------------------------------------------
@@ -544,3 +545,109 @@ class TestCheckDeploymentAvailability:
         sample_deployment.status.available_replicas = 0
         errors = StabilityAuditor.check_deployment_availability(workload_obj=sample_deployment)
         assert "tombstone" in errors[0].lower()
+
+
+class TestAuditWorkloadTombstoneAndAvailability:
+    """Tests for tombstone filtering and availability check in audit_workload."""
+
+    def _make_auditor_with_deployment(self, deployment: V1Deployment) -> StabilityAuditor:
+        """Return a StabilityAuditor whose _get_workload_object returns the given deployment."""
+        auditor = _make_auditor()
+        auditor._get_workload_object = MagicMock(return_value=deployment)  # type: ignore[method-assign]
+        return auditor
+
+    def _make_tombstone_pod(self, phase: str, name: str = "dead-pod") -> V1Pod:
+        """Create a pod in a terminal phase (tombstone)."""
+        return V1Pod(
+            metadata=V1ObjectMeta(
+                name=name,
+                labels={"pod-template-hash": "abc12"},
+                deletion_timestamp=None,
+            ),
+            spec=V1PodSpec(containers=[]),
+            status=V1PodStatus(
+                phase=phase,
+                start_time="2025-01-01T00:00:00Z",
+                conditions=[],
+                container_statuses=[],
+            ),
+        )
+
+    def test_tombstone_pod_fails_health_check_without_flag(
+        self, sample_deployment: V1Deployment, sample_workload_inspection: WorkloadInspectionResult
+    ) -> None:
+        """Verify OOMKilled pod fails health check when flag is not set."""
+        tombstone = self._make_tombstone_pod(phase="Failed", name="oomkilled-pod")
+        sample_workload_inspection.pods = [tombstone]
+        sample_deployment.status.available_replicas = 0  # availability also fails
+        auditor = self._make_auditor_with_deployment(sample_deployment)
+
+        result = auditor.audit_workload(
+            workload_info=sample_workload_inspection,
+            ignore_tombstone_pods=False,
+        )
+
+        assert result.pods_healthy is False
+        assert any("oomkilled-pod" in e or "not Ready" in e for e in result.errors)
+
+    def test_tombstone_pod_ignored_with_flag(
+        self, sample_deployment: V1Deployment, sample_workload_inspection: WorkloadInspectionResult
+    ) -> None:
+        """Verify OOMKilled pod is excluded from health check when flag is set."""
+        tombstone = self._make_tombstone_pod(phase="Failed", name="oomkilled-pod")
+        live_pod = _make_pod(name="live-pod", ready=True, labels={"pod-template-hash": "abc12"})
+        sample_workload_inspection.pods = [tombstone, live_pod]
+        # availability: 1 available of 2 desired — still fails availability
+        sample_deployment.status.available_replicas = 1
+        auditor = self._make_auditor_with_deployment(sample_deployment)
+
+        result = auditor.audit_workload(
+            workload_info=sample_workload_inspection,
+            ignore_tombstone_pods=True,
+        )
+
+        # Health check passes (tombstone excluded), but availability fails
+        assert result.pods_healthy is True
+        assert result.availability_sufficient is False
+
+    def test_availability_check_always_runs(
+        self, sample_deployment: V1Deployment, sample_workload_inspection: WorkloadInspectionResult
+    ) -> None:
+        """Verify availability check runs even when ignore_tombstone_pods=True."""
+        sample_deployment.status.available_replicas = 0
+        auditor = self._make_auditor_with_deployment(sample_deployment)
+
+        result = auditor.audit_workload(
+            workload_info=sample_workload_inspection,
+            ignore_tombstone_pods=True,
+        )
+
+        assert result.availability_sufficient is False
+        assert any("availability" in e.lower() for e in result.errors)
+
+    def test_availability_passes_when_replicas_match(
+        self, sample_deployment: V1Deployment, sample_workload_inspection: WorkloadInspectionResult
+    ) -> None:
+        """Verify availability_sufficient=True when available == desired."""
+        # sample_deployment: spec.replicas=2, status.available_replicas=2
+        auditor = self._make_auditor_with_deployment(sample_deployment)
+
+        result = auditor.audit_workload(workload_info=sample_workload_inspection)
+
+        assert result.availability_sufficient is True
+
+    def test_succeeded_pod_filtered_with_flag(
+        self, sample_deployment: V1Deployment, sample_workload_inspection: WorkloadInspectionResult
+    ) -> None:
+        """Verify Succeeded (completed) pod is excluded from health check when flag is set."""
+        completed = self._make_tombstone_pod(phase="Succeeded", name="completed-pod")
+        sample_workload_inspection.pods = [completed]
+        auditor = self._make_auditor_with_deployment(sample_deployment)
+
+        result = auditor.audit_workload(
+            workload_info=sample_workload_inspection,
+            ignore_tombstone_pods=True,
+        )
+
+        # No pods to health-check after filtering → pods_healthy=True (no errors)
+        assert result.pods_healthy is True

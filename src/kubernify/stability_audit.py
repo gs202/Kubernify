@@ -192,6 +192,7 @@ class StabilityAuditor:
         workload_info: WorkloadInspectionResult,
         restart_threshold: int = 3,
         min_uptime_sec: int = 0,
+        ignore_tombstone_pods: bool = False,
     ) -> StabilityAuditResult:
         """Orchestrates all stability checks.
 
@@ -200,9 +201,12 @@ class StabilityAuditor:
             restart_threshold: Maximum acceptable restart count per container.
                 Use ``0`` to forbid any restarts, or ``-1`` to skip the restart check entirely.
             min_uptime_sec: Minimum pod uptime in seconds.
+            ignore_tombstone_pods: When ``True``, pods in phase ``Failed`` or ``Succeeded``
+                (OOMKilled, Evicted, Completed) are excluded from per-pod health checks.
+                The deployment availability check always runs regardless of this flag.
 
         Returns:
-            StabilityAuditResult with convergence, revision, health, scheduling, and job status.
+            StabilityAuditResult with convergence, revision, health, scheduling, job, and availability status.
         """
         name = workload_info.name
         namespace = workload_info.namespace
@@ -246,9 +250,12 @@ class StabilityAuditor:
         else:
             result.revision_consistent = True
 
-        # 3. Pod Health
+        # 3. Pod Health — optionally filter tombstones (Failed/Succeeded) first
+        pods_to_check = (
+            [p for p in pods if p.status.phase not in ("Failed", "Succeeded")] if ignore_tombstone_pods else pods
+        )
         pod_errors = []
-        for pod in pods:
+        for pod in pods_to_check:
             pod_errors.extend(
                 self.check_pod_health(pod=pod, restart_threshold=restart_threshold, min_uptime_sec=min_uptime_sec),
             )
@@ -277,5 +284,17 @@ class StabilityAuditor:
                 result.errors.extend(job_errors)
         else:
             result.job_complete = True
+
+        # 6. Deployment Availability (always runs for Deployments, tombstones already
+        #    excluded by the Kubernetes controller from available_replicas)
+        if w_type == WorkloadType.DEPLOYMENT:
+            avail_errors = self.check_deployment_availability(workload_obj=workload_obj)
+            if not avail_errors:
+                result.availability_sufficient = True
+            else:
+                result.availability_sufficient = False
+                result.errors.extend(avail_errors)
+        else:
+            result.availability_sufficient = True
 
         return result
