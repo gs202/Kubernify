@@ -10,6 +10,7 @@ from kubernetes.client import (
     V1ContainerStatus,
     V1DaemonSet,
     V1DaemonSetStatus,
+    V1Deployment,
     V1Job,
     V1JobSpec,
     V1JobStatus,
@@ -506,3 +507,40 @@ class TestCheckPodHealthMinUptime:
         errors = auditor.check_pod_health(pod=pod, restart_threshold=3, min_uptime_sec=0)
 
         assert errors == []
+
+
+class TestCheckDeploymentAvailability:
+    """Tests for StabilityAuditor.check_deployment_availability."""
+
+    def test_available_equals_desired_passes(self, sample_deployment: V1Deployment) -> None:
+        """Verify available_replicas == spec.replicas returns no errors."""
+        # sample_deployment has spec.replicas=2, status.available_replicas=2
+        errors = StabilityAuditor.check_deployment_availability(workload_obj=sample_deployment)
+        assert errors == []
+
+    def test_available_less_than_desired_fails(self, sample_deployment: V1Deployment) -> None:
+        """Verify available_replicas < spec.replicas returns an error."""
+        sample_deployment.status.available_replicas = 1  # only 1 of 2 available
+        errors = StabilityAuditor.check_deployment_availability(workload_obj=sample_deployment)
+        assert len(errors) == 1
+        assert "1/2" in errors[0]
+
+    def test_zero_desired_replicas_skips_check(self, sample_deployment: V1Deployment) -> None:
+        """Verify spec.replicas == 0 skips the availability check."""
+        sample_deployment.spec.replicas = 0
+        sample_deployment.status.available_replicas = 0
+        errors = StabilityAuditor.check_deployment_availability(workload_obj=sample_deployment)
+        assert errors == []
+
+    def test_none_available_replicas_treated_as_zero(self, sample_deployment: V1Deployment) -> None:
+        """Verify None available_replicas is treated as 0 (fails when desired > 0)."""
+        sample_deployment.status.available_replicas = None
+        errors = StabilityAuditor.check_deployment_availability(workload_obj=sample_deployment)
+        assert len(errors) == 1
+        assert "0/2" in errors[0]
+
+    def test_error_message_includes_tombstone_note(self, sample_deployment: V1Deployment) -> None:
+        """Verify error message mentions tombstone exclusion."""
+        sample_deployment.status.available_replicas = 0
+        errors = StabilityAuditor.check_deployment_availability(workload_obj=sample_deployment)
+        assert "tombstone" in errors[0].lower()

@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from kubernetes.client import V1DaemonSet, V1Job, V1Pod
+from kubernetes.client import V1DaemonSet, V1Deployment, V1Job, V1Pod
 
 from .kubernetes_controller import KubernetesController
 from .models import (
@@ -139,6 +139,36 @@ class StabilityAuditor:
             errors.append(f"Job failed count {failed} > backoffLimit {backoff_limit}")
 
         return errors
+
+    @staticmethod
+    def check_deployment_availability(workload_obj: V1Deployment) -> list[str]:
+        """Assert that available replicas match the desired replica count.
+
+        Uses ``deployment.status.available_replicas`` (Ready + Running pods;
+        tombstones excluded by the Kubernetes controller) vs
+        ``deployment.spec.replicas`` (desired count).
+
+        Skips the check when ``spec.replicas`` is 0 (e.g. HPA/KEDA scaled to zero).
+
+        Args:
+            workload_obj: The live ``V1Deployment`` object from the API server.
+
+        Returns:
+            A list of error strings (empty when availability is satisfied or skipped).
+        """
+        desired = (workload_obj.spec.replicas or 0) if workload_obj.spec else 0
+        if desired == 0:
+            return []
+
+        available = (workload_obj.status.available_replicas or 0) if workload_obj.status else 0
+        ready = (workload_obj.status.ready_replicas or 0) if workload_obj.status else 0
+
+        if available < desired:
+            return [
+                f"Deployment availability insufficient: {available}/{desired} pods available "
+                f"({ready} ready; tombstone pods excluded by Kubernetes controller)"
+            ]
+        return []
 
     def _get_workload_object(self, name: str, namespace: str, workload_type: str) -> KubernetesWorkload | None:
         """Helper to fetch the actual Kubernetes object."""
