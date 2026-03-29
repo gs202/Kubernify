@@ -100,7 +100,7 @@ class TestStabilityAuditResult:
     """Tests for ``StabilityAuditResult`` dataclass defaults."""
 
     def test_stability_audit_result_defaults(self) -> None:
-        """Verify all booleans default to False and errors list is empty."""
+        """Verify all booleans default to False (except availability_sufficient) and errors list is empty."""
         result = StabilityAuditResult()
 
         assert result.converged is False
@@ -108,6 +108,7 @@ class TestStabilityAuditResult:
         assert result.pods_healthy is False
         assert result.scheduling_complete is False
         assert result.job_complete is False
+        assert result.availability_sufficient is True  # True = check skipped or passed
         assert result.errors == []
 
 

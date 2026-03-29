@@ -170,6 +170,7 @@ class StabilityAuditResult:
     pods_healthy: bool = False
     scheduling_complete: bool = False
     job_complete: bool = False
+    availability_sufficient: bool = True  # True when check is skipped (non-Deployment) or passes
     errors: list[str] = field(default_factory=list)
 
 
