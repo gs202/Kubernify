@@ -115,6 +115,7 @@ class TestParseArgs:
         assert args.include_statefulsets is False
         assert args.include_daemonsets is False
         assert args.include_jobs is False
+        assert args.ignore_tombstone_pods is False
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +542,7 @@ class TestRunVerification:
             required_workloads=None,
             skip_containers=None,
             component_aliases=None,
+            ignore_tombstone_pods=False,
         )
 
         mock_controller = MagicMock()
@@ -610,6 +612,7 @@ class TestRunVerification:
             required_workloads=None,
             skip_containers=None,
             component_aliases=None,
+            ignore_tombstone_pods=False,
         )
 
         mock_controller = MagicMock()
@@ -678,6 +681,7 @@ class TestRunVerification:
             required_workloads=None,
             skip_containers=None,
             component_aliases=None,
+            ignore_tombstone_pods=False,
         )
 
         mock_controller = MagicMock()
@@ -728,6 +732,7 @@ class TestRunVerification:
             required_workloads=None,
             skip_containers=None,
             component_aliases=None,
+            ignore_tombstone_pods=False,
         )
 
         mock_controller = MagicMock()
@@ -896,3 +901,25 @@ class TestParseArgsComponentAliases:
         )
 
         assert args.component_aliases == '{"foo": "bar-baz"}'
+
+
+class TestIgnoreTombstonePodsFlag:
+    """Tests for --ignore-tombstone-pods CLI flag."""
+
+    def test_ignore_tombstone_pods_default_false(self) -> None:
+        """Verify --ignore-tombstone-pods defaults to False."""
+        args = parse_args(["--manifest", '{"backend": "v1.0.0"}', "--anchor", "my-app"])
+        assert args.ignore_tombstone_pods is False
+
+    def test_ignore_tombstone_pods_flag_sets_true(self) -> None:
+        """Verify --ignore-tombstone-pods sets the flag to True."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--ignore-tombstone-pods",
+            ]
+        )
+        assert args.ignore_tombstone_pods is True
