@@ -714,6 +714,17 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Include Jobs and CronJobs",
     )
+    parser.add_argument(
+        "--ignore-tombstone-pods",
+        action="store_true",
+        default=False,
+        help=(
+            "When set, pods in phase Failed or Succeeded (OOMKilled, Evicted, Completed) "
+            "are excluded from per-pod health checks. "
+            "The deployment availability check (available_replicas >= spec.replicas) "
+            "always runs regardless of this flag."
+        ),
+    )
     return parser.parse_args(args)
 
 
@@ -745,6 +756,7 @@ def _perform_stability_audit(
     skip_containers: list[str],
     restart_threshold: int,
     min_uptime: int,
+    ignore_tombstone_pods: bool = False,
 ) -> tuple[dict[str, StabilityAuditResult], bool]:
     """Perform stability audit on relevant workloads.
 
@@ -758,6 +770,8 @@ def _perform_stability_audit(
         restart_threshold: Maximum acceptable restart count per container.
             Use ``0`` to forbid any restarts, or ``-1`` to skip the restart check entirely.
         min_uptime: Minimum pod uptime in seconds.
+        ignore_tombstone_pods: When ``True``, pods in phase Failed or Succeeded are
+            excluded from per-pod health checks before calling ``audit_workload``.
 
     Returns:
         Tuple of ``(stability_results, all_stable)`` where ``stability_results``
@@ -800,6 +814,7 @@ def _perform_stability_audit(
             workload_info=discovered_map[w_key],
             restart_threshold=restart_threshold,
             min_uptime_sec=min_uptime,
+            ignore_tombstone_pods=ignore_tombstone_pods,
         )
         stability_results[w_key] = audit_res
         if audit_res.errors:
@@ -916,6 +931,7 @@ def run_verification(args: argparse.Namespace) -> int:
             skip_containers=skip_containers,
             restart_threshold=args.restart_threshold,
             min_uptime=args.min_uptime,
+            ignore_tombstone_pods=args.ignore_tombstone_pods,
         )
 
         has_errors = bool(verification_results.errors) or bool(missing_components) or bool(missing_workloads)

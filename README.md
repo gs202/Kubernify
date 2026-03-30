@@ -82,6 +82,7 @@ kubernify [OPTIONS]
 | `--include-statefulsets` | Include StatefulSets in workload discovery. By default, only Deployments are inspected. | `false` |
 | `--include-daemonsets` | Include DaemonSets in workload discovery. By default, only Deployments are inspected. | `false` |
 | `--include-jobs` | Include Jobs and CronJobs in workload discovery. By default, only Deployments are inspected. | `false` |
+| `--ignore-tombstone-pods` | When set, pods in phase `Failed` or `Succeeded` (OOMKilled, Evicted, Completed scripts) are excluded from per-pod health checks. These "gray" pods do not cause health check failures. The deployment availability check (`available_replicas >= spec.replicas`) always runs regardless of this flag. | `false` |
 
 ---
 
@@ -131,6 +132,7 @@ kubernify \
   --include-jobs \
   --min-uptime 120 \
   --restart-threshold 5 \
+  --ignore-tombstone-pods \
   --timeout 600 \
   --allow-zero-replicas
   # OR selectively:
