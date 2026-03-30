@@ -251,9 +251,10 @@ class StabilityAuditor:
             result.revision_consistent = True
 
         # 3. Pod Health — optionally filter tombstones (Failed/Succeeded) first
-        pods_to_check = (
-            [p for p in pods if p.status.phase not in ("Failed", "Succeeded")] if ignore_tombstone_pods else pods
-        )
+        def _is_tombstone(pod: V1Pod) -> bool:
+            return getattr(pod.status, "phase", None) in ("Failed", "Succeeded")
+
+        pods_to_check = [p for p in pods if not _is_tombstone(p)] if ignore_tombstone_pods else pods
         pod_errors = []
         for pod in pods_to_check:
             pod_errors.extend(
