@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-03-30
+
+### Added
+
+- `--ignore-tombstone-pods` CLI flag to exclude Failed/Succeeded pods from per-pod health checks
+- `StabilityAuditor.check_deployment_availability()` method to verify `available_replicas >= spec.replicas` for Deployments
+- Deployment availability check always runs regardless of `--ignore-tombstone-pods` flag
+
 ## [1.0.4] - 2026-03-22
 
 ### Changed
