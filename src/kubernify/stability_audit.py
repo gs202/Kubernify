@@ -290,12 +290,7 @@ class StabilityAuditor:
         #    excluded by the Kubernetes controller from available_replicas)
         if w_type == WorkloadType.DEPLOYMENT:
             avail_errors = self.check_deployment_availability(workload_obj=workload_obj)
-            if not avail_errors:
-                result.availability_sufficient = True
-            else:
-                result.availability_sufficient = False
+            if avail_errors:
                 result.errors.extend(avail_errors)
-        else:
-            result.availability_sufficient = True
 
         return result

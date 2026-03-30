@@ -608,7 +608,7 @@ class TestAuditWorkloadTombstoneAndAvailability:
 
         # Health check passes (tombstone excluded), but availability fails
         assert result.pods_healthy is True
-        assert result.availability_sufficient is False
+        assert any("availability" in e.lower() for e in result.errors)
 
     def test_availability_check_always_runs(
         self, sample_deployment: V1Deployment, sample_workload_inspection: WorkloadInspectionResult
@@ -622,19 +622,18 @@ class TestAuditWorkloadTombstoneAndAvailability:
             ignore_tombstone_pods=True,
         )
 
-        assert result.availability_sufficient is False
         assert any("availability" in e.lower() for e in result.errors)
 
     def test_availability_passes_when_replicas_match(
         self, sample_deployment: V1Deployment, sample_workload_inspection: WorkloadInspectionResult
     ) -> None:
-        """Verify availability_sufficient=True when available == desired."""
+        """Verify no availability errors when available == desired."""
         # sample_deployment: spec.replicas=2, status.available_replicas=2
         auditor = self._make_auditor_with_deployment(sample_deployment)
 
         result = auditor.audit_workload(workload_info=sample_workload_inspection)
 
-        assert result.availability_sufficient is True
+        assert not any("availability" in e.lower() for e in result.errors)
 
     def test_succeeded_pod_filtered_with_flag(
         self, sample_deployment: V1Deployment, sample_workload_inspection: WorkloadInspectionResult
