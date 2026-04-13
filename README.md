@@ -69,7 +69,7 @@ kubernify [OPTIONS]
 | `--gke-project` | GCP project ID — resolves the kube context from GKE-style context names (e.g., `gke_my-project_us-central1_cluster-name`). Mutually exclusive with `--context`. |  |
 | `--anchor` | **(required)** The image path segment used as the anchor point for component name extraction. For example, given image `registry.example.com/my-org/my-app/backend:v1.0`, using `--anchor my-app` extracts the component name `backend`. See [How Image Anchor Works](#how-image-anchor-works). |  |
 | `--manifest` | **(required)** JSON string containing the version manifest mapping component names to their expected versions, e.g. `'{"backend": "v1.2.3", "frontend": "v2.0.0"}'`. |  |
-| `--component-aliases` | JSON string mapping manifest component names to their actual image names when they differ. Example: `'{"foo": "bar-baz"}'` means the manifest key `foo` corresponds to the container image named `bar-baz`. |  |
+| `--component-aliases` | JSON string mapping manifest component names to their actual image names when they differ. Example: `'{"foo": "bar-baz"}'` means the manifest key `foo` corresponds to the container image named `bar-baz`. Multiple manifest keys can alias to the same image name — disambiguation is performed by matching the manifest key against the Kubernetes workload name (substring match). See [Component Aliases](#component-aliases). |  |
 | `--namespace` | Kubernetes namespace to verify. Resolved automatically from kubeconfig context, in-cluster service account, or falls back to `default`. | From kubeconfig context |
 | `--required-workloads` | Comma-separated **substring** patterns for workloads that must exist in the namespace, **independent of the manifest**. Useful for ensuring critical workloads (e.g., infrastructure sidecars, operators) are present even if they aren't version-verified. Each pattern is matched against discovered workload names using substring containment (e.g., `frontend` matches `my-app-frontend`). Verification fails if any pattern has no match. |  |
 | `--skip-containers` | Comma-separated **substring** patterns to skip during verification. Each pattern is matched against both container names and workload names using substring containment (e.g., `backend` matches `my-app-backend`). Skipped workloads are excluded from both version verification and stability audits. |  |
@@ -224,6 +224,47 @@ The extracted component name is then matched against the keys in your `--manifes
 
 ---
 
+## Component Aliases
+
+Use `--component-aliases` when a manifest component name differs from the container image name extracted by the anchor.
+
+### Basic Alias (One-to-One)
+
+If your manifest uses the key `foo` but the container image is named `bar-baz`:
+
+```bash
+kubernify \
+  --anchor my-app \
+  --manifest '{"foo": "v1.0.0", "backend": "v2.0.0"}' \
+  --component-aliases '{"foo": "bar-baz"}'
+```
+
+This tells kubernify: when you see image `bar-baz`, map it to the manifest key `foo`.
+
+### Shared Image Alias (Many-to-One)
+
+Multiple manifest components can share the same container image name. kubernify disambiguates by matching each manifest key against the Kubernetes **workload name** (substring match).
+
+For example, if both `ingest` and `process` use the same `shared-svc` image but run as separate workloads:
+
+```bash
+kubernify \
+  --anchor my-app \
+  --manifest '{"ingest": "v1.0.0", "process": "v1.0.0"}' \
+  --component-aliases '{"ingest": "shared-svc", "process": "shared-svc"}' \
+  --include-statefulsets
+```
+
+Given these workloads in the cluster:
+- Deployment `my-app-123-ingest` → image `shared-svc:v1.0.0` → mapped to manifest key **`ingest`** (because `"ingest"` is a substring of `"my-app-123-ingest"`)
+- StatefulSet `my-app-123-process-node` → image `shared-svc:v1.0.0` → mapped to manifest key **`process`** (because `"process"` is a substring of `"my-app-123-process-node"`)
+
+**Resolution priority** when multiple candidates exist for the same image:
+
+1. If only one candidate → use it directly
+2. If multiple candidates → pick the one whose manifest key is a substring of the workload name
+3. If no candidate matches the workload name → fall back to the raw image component name (if it's in the manifest)
+4. If nothing matches → the workload is skipped (not mapped to any manifest key)
 
 ---
 
