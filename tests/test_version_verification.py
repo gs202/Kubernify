@@ -185,7 +185,7 @@ class TestConstructComponentMap:
             workloads=workloads,
             manifest=manifest,
             repository_anchor="my-app",
-            reverse_aliases={"bar-baz": "foo"},
+            reverse_aliases={"bar-baz": ["foo"]},
         )
 
         assert "foo" in result
@@ -209,7 +209,7 @@ class TestConstructComponentMap:
             workloads=workloads,
             manifest=manifest,
             repository_anchor="my-app",
-            reverse_aliases={"bar-baz": "foo"},
+            reverse_aliases={"bar-baz": ["foo"]},
         )
 
         assert "backend" in result
@@ -235,6 +235,55 @@ class TestConstructComponentMap:
 
         # Without alias, bar-baz != foo, so it's not in the map
         assert "foo" not in result
+
+    def test_construct_component_map_multi_alias_disambiguation(self) -> None:
+        """Verify multiple manifest keys sharing the same image are disambiguated by workload name."""
+        manifest = {"foo": "v1.0.0", "bar": "v1.0.0"}
+        workloads = [
+            _make_workload_inspection(
+                name="my-app-123-foo",
+                image="registry.example.com/my-org/my-app/shared-svc:v1.0.0",
+            ),
+            _make_workload_inspection(
+                name="my-app-123-bar-node",
+                workload_type="StatefulSet",
+                image="registry.example.com/my-org/my-app/shared-svc:v1.0.0",
+            ),
+        ]
+
+        result = construct_component_map(
+            workloads=workloads,
+            manifest=manifest,
+            repository_anchor="my-app",
+            reverse_aliases={"shared-svc": ["foo", "bar"]},
+        )
+
+        assert "foo" in result
+        assert "bar" in result
+        assert result["foo"][0].workload_name == "my-app-123-foo"
+        assert result["bar"][0].workload_name == "my-app-123-bar-node"
+
+    def test_construct_component_map_multi_alias_no_workload_match_falls_back(self) -> None:
+        """Verify multi-alias falls back to raw component name when no workload name matches."""
+        manifest = {"shared-svc": "v1.0.0", "foo": "v1.0.0"}
+        workloads = [
+            _make_workload_inspection(
+                name="my-app-123-unknown-service",
+                image="registry.example.com/my-org/my-app/shared-svc:v1.0.0",
+            ),
+        ]
+
+        result = construct_component_map(
+            workloads=workloads,
+            manifest=manifest,
+            repository_anchor="my-app",
+            reverse_aliases={"shared-svc": ["foo", "bar"]},
+        )
+
+        # Neither "foo" nor "bar" is in the workload name, but
+        # "shared-svc" IS in the manifest, so it falls back to that.
+        assert "shared-svc" in result
+        assert result["shared-svc"][0].workload_name == "my-app-123-unknown-service"
 
 
 # ---------------------------------------------------------------------------
