@@ -220,17 +220,78 @@ def _should_skip(skip_patterns: list[str], container_name: str, workload_name: s
     return None
 
 
+def _resolve_component(
+    parsed_component: str,
+    workload_name: str,
+    alias_lookup: dict[str, list[str]],
+    manifest: dict[str, str],
+) -> str | None:
+    """Resolve a parsed image component name to a manifest key.
+
+    Resolution order:
+
+    1. If the parsed component name is directly in the manifest and has no
+       alias entry, return it immediately (no alias needed).
+    2. If an alias entry exists for the parsed component, pick the best
+       candidate:
+
+       a. If only one candidate exists, return it.
+       b. If multiple candidates exist, prefer the one whose manifest key
+          appears as a substring of the workload name.
+       c. If no candidate matches the workload name, fall through to
+          step 3.
+
+    3. Fall back to the parsed component name itself if it is in the
+       manifest.
+    4. Return ``None`` — no match.
+
+    Args:
+        parsed_component: Component name extracted from the container image
+            (e.g. ``"shared-svc"``).
+        workload_name: Kubernetes workload name used for disambiguation
+            (e.g. ``"my-app-123-bar-node"``).
+        alias_lookup: Reverse alias map built by ``build_reverse_alias_map``.
+        manifest: Version manifest for membership checks.
+
+    Returns:
+        The resolved manifest key, or ``None`` if no match is found.
+    """
+    candidates = alias_lookup.get(parsed_component)
+
+    if candidates is None:
+        # No alias defined — use the raw parsed component if it's in the manifest
+        return parsed_component if parsed_component in manifest else None
+
+    if len(candidates) == 1:
+        return candidates[0] if candidates[0] in manifest else None
+
+    # Multiple candidates — disambiguate by workload name
+    for candidate in candidates:
+        if candidate in workload_name:
+            return candidate if candidate in manifest else None
+
+    # No workload-name match — fall back to raw component if it's in the manifest
+    if parsed_component in manifest:
+        return parsed_component
+
+    return None
+
+
 def construct_component_map(
     workloads: list[WorkloadInspectionResult],
     manifest: dict[str, str],
     repository_anchor: str,
     skip_containers: list[str] | None = None,
-    reverse_aliases: dict[str, str] | None = None,
+    reverse_aliases: dict[str, list[str]] | None = None,
 ) -> dict[str, list[ComponentMapEntry]]:
     """Construct a map of components to their found workloads and versions.
 
     Always extracts containers from both running pods and zero-replica pod spec
     templates so that all manifest components can be verified.
+
+    When multiple manifest keys alias to the same container image name, the
+    workload name is used to disambiguate: the manifest key that appears as a
+    substring of the workload name wins.
 
     Args:
         workloads: Discovered Kubernetes workload objects.
@@ -238,8 +299,9 @@ def construct_component_map(
         repository_anchor: Repository name used as the anchor for image parsing.
         skip_containers: Optional list of patterns; workloads whose container name
             or workload name matches any pattern are excluded from the map entirely.
-        reverse_aliases: Optional mapping from image names to manifest component
-            names (e.g. ``{"foo": "bar"}``).  Built by ``build_reverse_alias_map()``.
+        reverse_aliases: Optional mapping from image names to **lists** of manifest
+            component names (e.g. ``{"shared-svc": ["foo", "bar"]}``).
+            Built by ``build_reverse_alias_map()``.
 
     Returns:
         Dict mapping component names to lists of ``ComponentMapEntry`` instances.
@@ -256,9 +318,14 @@ def construct_component_map(
                 continue
 
             # Apply alias resolution: remap image name → manifest component name
-            resolved_component = alias_lookup.get(parsed.component, parsed.component)
+            resolved_component = _resolve_component(
+                parsed_component=parsed.component,
+                workload_name=workload.name,
+                alias_lookup=alias_lookup,
+                manifest=manifest,
+            )
 
-            if resolved_component not in manifest:
+            if resolved_component is None:
                 continue
 
             if _should_skip(
@@ -475,8 +542,12 @@ def load_component_aliases(raw: str | None) -> dict[str, str]:
 def build_reverse_alias_map(
     aliases: dict[str, str],
     manifest: dict[str, str],
-) -> dict[str, str]:
+) -> dict[str, list[str]]:
     """Build a reverse lookup from image names to manifest component names.
+
+    Supports many-to-one mappings where multiple manifest keys alias to the
+    same container image name.  When this happens, the caller must
+    disambiguate using the workload name (see ``construct_component_map``).
 
     Args:
         aliases: Mapping of manifest component names to image names
@@ -484,24 +555,18 @@ def build_reverse_alias_map(
         manifest: The version manifest for validation.
 
     Returns:
-        Inverted mapping from image names to manifest keys
-        (e.g. ``{"baz-baz": "foo"}``).
-
-    Raises:
-        ValueError: If two manifest keys alias to the same image name.
+        Mapping from image names to **lists** of manifest keys
+        (e.g. ``{"bar-baz": ["foo"]}``).  When multiple manifest keys
+        share the same image name the list will contain all of them
+        (e.g. ``{"shared-svc": ["foo", "bar"]}``).
     """
-    reverse: dict[str, str] = {}
+    reverse: dict[str, list[str]] = {}
     for manifest_key, image_name in aliases.items():
         if manifest_key not in manifest:
             logger.warning(
                 f"Component alias key '{manifest_key}' is not present in the manifest — this alias will have no effect"
             )
-        if image_name in reverse:
-            raise ValueError(
-                f"Duplicate component alias: both '{reverse[image_name]}' and "
-                f"'{manifest_key}' map to image name '{image_name}'"
-            )
-        reverse[image_name] = manifest_key
+        reverse.setdefault(image_name, []).append(manifest_key)
     return reverse
 
 

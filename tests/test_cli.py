@@ -11,6 +11,7 @@ import pytest
 from kubernify.cli import (
     _get_current_namespace,
     _parse_comma_list,
+    _resolve_component,
     _setup_logging,
     build_reverse_alias_map,
     load_component_aliases,
@@ -828,22 +829,22 @@ class TestBuildReverseAliasMap:
     """Tests for ``build_reverse_alias_map``."""
 
     def test_basic_reverse_mapping(self) -> None:
-        """Verify aliases are inverted correctly."""
+        """Verify aliases are inverted correctly into a list."""
         aliases = {"foo": "bar-baz"}
         manifest = {"foo": "v1.0.0", "backend": "v2.0.0"}
 
         result = build_reverse_alias_map(aliases=aliases, manifest=manifest)
 
-        assert result == {"bar-baz": "foo"}
+        assert result == {"bar-baz": ["foo"]}
 
     def test_multiple_aliases_reversed(self) -> None:
-        """Verify multiple aliases are all inverted."""
+        """Verify multiple aliases with different image names are all inverted."""
         aliases = {"foo": "bar-baz", "my-comp": "server"}
         manifest = {"foo": "v1.0.0", "my-comp": "v2.0.0"}
 
         result = build_reverse_alias_map(aliases=aliases, manifest=manifest)
 
-        assert result == {"bar-baz": "foo", "server": "my-comp"}
+        assert result == {"bar-baz": ["foo"], "server": ["my-comp"]}
 
     def test_empty_aliases_returns_empty(self) -> None:
         """Verify empty aliases returns empty dict."""
@@ -851,13 +852,15 @@ class TestBuildReverseAliasMap:
 
         assert result == {}
 
-    def test_duplicate_image_name_raises_value_error(self) -> None:
-        """Verify two manifest keys aliasing to the same image name raises ValueError."""
-        aliases = {"foo": "bar-baz", "foo2": "bar-baz"}
-        manifest = {"foo": "v1.0.0", "foo2": "v2.0.0"}
+    def test_duplicate_image_name_collects_both_keys(self) -> None:
+        """Verify two manifest keys aliasing to the same image name are collected in a list."""
+        aliases = {"foo": "shared-svc", "bar": "shared-svc"}
+        manifest = {"foo": "v1.0.0", "bar": "v2.0.0"}
 
-        with pytest.raises(ValueError, match="Duplicate component alias"):
-            build_reverse_alias_map(aliases=aliases, manifest=manifest)
+        result = build_reverse_alias_map(aliases=aliases, manifest=manifest)
+
+        assert "shared-svc" in result
+        assert set(result["shared-svc"]) == {"foo", "bar"}
 
     def test_alias_key_not_in_manifest_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """Verify alias key not in manifest logs a warning but does not raise."""
@@ -867,8 +870,100 @@ class TestBuildReverseAliasMap:
         with caplog.at_level(logging.WARNING):
             result = build_reverse_alias_map(aliases=aliases, manifest=manifest)
 
-        assert result == {"bar-baz": "nonexistent"}
+        assert result == {"bar-baz": ["nonexistent"]}
         assert "not present in the manifest" in caplog.text
+
+
+class TestResolveComponent:
+    """Tests for ``_resolve_component`` disambiguation logic."""
+
+    def test_no_alias_component_in_manifest(self) -> None:
+        """Verify raw component name is returned when no alias exists and it's in the manifest."""
+        result = _resolve_component(
+            parsed_component="backend",
+            workload_name="my-app-backend",
+            alias_lookup={},
+            manifest={"backend": "v1.0.0"},
+        )
+
+        assert result == "backend"
+
+    def test_no_alias_component_not_in_manifest(self) -> None:
+        """Verify None is returned when no alias exists and component is not in the manifest."""
+        result = _resolve_component(
+            parsed_component="redis",
+            workload_name="my-app-redis",
+            alias_lookup={},
+            manifest={"backend": "v1.0.0"},
+        )
+
+        assert result is None
+
+    def test_single_alias_candidate(self) -> None:
+        """Verify single alias candidate is returned directly."""
+        result = _resolve_component(
+            parsed_component="shared-svc",
+            workload_name="my-app-foo",
+            alias_lookup={"shared-svc": ["foo"]},
+            manifest={"foo": "v1.0.0"},
+        )
+
+        assert result == "foo"
+
+    def test_multi_alias_disambiguated_by_workload_name(self) -> None:
+        """Verify correct candidate is chosen when workload name contains the manifest key."""
+        result = _resolve_component(
+            parsed_component="shared-svc",
+            workload_name="my-app-123-bar-node",
+            alias_lookup={"shared-svc": ["foo", "bar"]},
+            manifest={"foo": "v1.0.0", "bar": "v1.0.0"},
+        )
+
+        assert result == "bar"
+
+    def test_multi_alias_disambiguated_first_candidate(self) -> None:
+        """Verify first candidate is chosen when workload name contains it."""
+        result = _resolve_component(
+            parsed_component="shared-svc",
+            workload_name="my-app-123-foo",
+            alias_lookup={"shared-svc": ["foo", "bar"]},
+            manifest={"foo": "v1.0.0", "bar": "v1.0.0"},
+        )
+
+        assert result == "foo"
+
+    def test_multi_alias_no_match_falls_back_to_raw_component(self) -> None:
+        """Verify fallback to raw component when no candidate matches workload name."""
+        result = _resolve_component(
+            parsed_component="shared-svc",
+            workload_name="my-app-123-unknown-service",
+            alias_lookup={"shared-svc": ["foo", "bar"]},
+            manifest={"foo": "v1.0.0", "bar": "v1.0.0", "shared-svc": "v1.0.0"},
+        )
+
+        assert result == "shared-svc"
+
+    def test_multi_alias_no_match_no_fallback_returns_none(self) -> None:
+        """Verify None when no candidate matches and raw component is not in manifest."""
+        result = _resolve_component(
+            parsed_component="shared-svc",
+            workload_name="my-app-123-unknown-service",
+            alias_lookup={"shared-svc": ["foo", "bar"]},
+            manifest={"foo": "v1.0.0", "bar": "v1.0.0"},
+        )
+
+        assert result is None
+
+    def test_single_alias_candidate_not_in_manifest(self) -> None:
+        """Verify None when single alias candidate is not in the manifest."""
+        result = _resolve_component(
+            parsed_component="shared-svc",
+            workload_name="my-app-foo",
+            alias_lookup={"shared-svc": ["nonexistent"]},
+            manifest={"foo": "v1.0.0"},
+        )
+
+        assert result is None
 
 
 class TestParseArgsComponentAliases:

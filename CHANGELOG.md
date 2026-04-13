@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `--component-aliases` now supports multiple manifest keys aliasing to the same container image name. Previously, this raised `ValueError: Duplicate component alias`. Disambiguation is performed by matching each manifest key against the Kubernetes workload name (substring match).
+
+### Added
+
+- New `_resolve_component()` function for workload-name-based disambiguation when multiple manifest components share the same container image
+- "Component Aliases" section in README documenting basic and shared-image alias usage
+
 ## [1.0.5] - 2026-03-30
 
 ### Added
