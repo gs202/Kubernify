@@ -77,7 +77,7 @@ kubernify [OPTIONS]
 | `--restart-threshold` | Maximum acceptable container restart count. Containers exceeding this threshold are flagged as unstable. Use `0` to forbid any restarts, or `-1` to skip the restart check entirely. | `3` |
 | `--timeout` | Global timeout in seconds for the verification loop. The tool retries discovery and verification until all checks pass or this timeout is reached. Returns exit code `2` on timeout. | `300` |
 | `--allow-zero-replicas` | Allow **all** workloads with zero running replicas to pass verification (version is still checked via the pod spec template). Mutually exclusive with `--allow-zero-replicas-for`. | `false` |
-| `--allow-zero-replicas-for` | Comma-separated list of **exact** workload names allowed to have 0 running replicas (e.g., `my-cronjob-worker,batch-processor`). Uses exact name matching, not substring. Mutually exclusive with `--allow-zero-replicas`. |  |
+| `--allow-zero-replicas-for` | Comma-separated list of workload name **patterns** allowed to have 0 running replicas (e.g., `my-cronjob-worker,batch-processor`). Uses **substring matching**: `my-worker` matches `ns-123-my-worker`. Mutually exclusive with `--allow-zero-replicas`. |  |
 | `--dry-run` | Perform a single snapshot check against the current cluster state without waiting for convergence. Exits immediately with pass/fail result. | `false` |
 | `--include-statefulsets` | Include StatefulSets in workload discovery. By default, only Deployments are inspected. | `false` |
 | `--include-daemonsets` | Include DaemonSets in workload discovery. By default, only Deployments are inspected. | `false` |
