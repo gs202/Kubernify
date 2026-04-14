@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-04-14
+
+### Fixed
+
+- `--allow-zero-replicas-for` now uses **substring matching** against workload names, consistent with `--skip-containers` and `--required-workloads`. Previously, exact matching caused the flag to silently fail when users passed short workload names (e.g. `my-worker`) that didn't match the fully-qualified Kubernetes workload name (e.g. `ns-123-my-worker`).
+
 ## [1.0.6] - 2026-04-13
 
 ### Fixed
