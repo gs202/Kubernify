@@ -542,6 +542,62 @@ class TestVerifyVersions:
         assert len(result.errors) == 1
         assert "mismatch" in result.errors[0].lower()
 
+    def test_verify_versions_zero_replicas_for_substring_matching(self) -> None:
+        """Verify allow_zero_replicas_for uses substring matching against workload names.
+
+        A short pattern like 'my-worker' should match a fully-qualified workload
+        name such as 'ns-123456-my-worker', consistent with how --skip-containers
+        and --required-workloads use substring matching.
+        """
+        manifest = {"backend": "v1.2.3"}
+        component_map = {
+            "backend": [
+                ComponentMapEntry(
+                    workload_name="ns-123456-my-worker",
+                    workload_type="Deployment",
+                    container_name="backend",
+                    container_type=ContainerType.APP,
+                    actual_version="v1.2.3",
+                    pods=[],
+                ),
+            ],
+        }
+
+        result = verify_versions(
+            manifest=manifest,
+            component_map=component_map,
+            allow_zero_replicas=False,
+            allow_zero_replicas_for=["my-worker"],
+        )
+
+        assert result.errors == []
+
+    def test_verify_versions_zero_replicas_for_substring_no_match(self) -> None:
+        """Verify substring matching does not match unrelated workload names."""
+        manifest = {"backend": "v1.2.3"}
+        component_map = {
+            "backend": [
+                ComponentMapEntry(
+                    workload_name="ns-123456-my-worker",
+                    workload_type="Deployment",
+                    container_name="backend",
+                    container_type=ContainerType.APP,
+                    actual_version="v1.2.3",
+                    pods=[],
+                ),
+            ],
+        }
+
+        result = verify_versions(
+            manifest=manifest,
+            component_map=component_map,
+            allow_zero_replicas=False,
+            allow_zero_replicas_for=["other-service"],
+        )
+
+        assert len(result.errors) == 1
+        assert "0 running pods" in result.errors[0]
+
 
 # ---------------------------------------------------------------------------
 # validate_manifest tests

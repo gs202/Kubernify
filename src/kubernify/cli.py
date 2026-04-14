@@ -405,17 +405,24 @@ def _verify_component_entry(
     Note: skip-pattern filtering is already performed in ``construct_component_map``,
     so entries reaching this function are guaranteed to not match any skip pattern.
 
+    Uses **substring matching** for ``allow_zero_replicas_for``: a workload is
+    exempted when any pattern in the set is contained in the workload name.
+    This is consistent with ``--skip-containers`` and ``--required-workloads``.
+
     Args:
         entry: Workload entry containing container and version information.
         expected_version: Expected version string.
         allow_zero_replicas: When ``True``, do not fail workloads with 0 running pods.
-        allow_zero_replicas_for: Workload names selectively allowed to have 0 replicas.
+        allow_zero_replicas_for: Patterns selectively allowing workloads to have 0
+            replicas.  Matched as substrings against the workload name.
 
     Returns:
         ``VerificationResult`` containing verification status.
     """
     if not entry.pods:
-        workload_is_exempted = allow_zero_replicas or entry.workload_name in allow_zero_replicas_for
+        workload_is_exempted = allow_zero_replicas or any(
+            pattern in entry.workload_name for pattern in allow_zero_replicas_for
+        )
         if not workload_is_exempted:
             return VerificationResult(
                 workload=entry.workload_name,
@@ -454,13 +461,13 @@ def verify_versions(
         manifest: Dict mapping component names to expected version strings.
         component_map: Dict mapping component names to their discovered workloads.
         allow_zero_replicas: When ``True``, do not fail workloads with 0 running pods.
-        allow_zero_replicas_for: Optional list of workload names selectively allowed
-            to have 0 replicas.
+        allow_zero_replicas_for: Optional list of workload name patterns selectively
+            allowed to have 0 replicas.  Matched as substrings against workload names.
 
     Returns:
         A ``VersionVerificationResults`` instance with per-component details.
     """
-    _exempted_names: frozenset[str] = frozenset(allow_zero_replicas_for or ())
+    _exempted_patterns: frozenset[str] = frozenset(allow_zero_replicas_for or ())
     results = VersionVerificationResults()
 
     for component, expected_version in manifest.items():
@@ -479,7 +486,7 @@ def verify_versions(
                 entry=entry,
                 expected_version=expected_version,
                 allow_zero_replicas=allow_zero_replicas,
-                allow_zero_replicas_for=_exempted_names,
+                allow_zero_replicas_for=_exempted_patterns,
             )
             comp_result.workloads.append(entry_status)
             if entry_status.status == VerificationStatus.FAIL:
@@ -743,7 +750,9 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--allow-zero-replicas-for",
         default=None,
         help=(
-            "Comma-separated list of workload names allowed to have 0 replicas "
+            "Comma-separated list of workload name patterns allowed to have 0 replicas. "
+            "Uses substring matching: e.g. 'my-worker' matches "
+            "'ns-123-my-worker' "
             "(mutually exclusive with --allow-zero-replicas)"
         ),
     )
