@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-04-15
+
 ### Changed
 
 - **BREAKING:** Removed `TIMEOUT` from `VerificationStatus` enum. Timeout now produces `FAIL` (exit code `1`) instead of `TIMEOUT` (exit code `2`). This simplifies the exit code contract to `0` (pass) / `1` (fail).
+
+### Added
+
+- `passing_components` counter in report summary — counts components in PASS state (version match + stable workloads). The summary field order is now: `total_components` → `passing_components` → `failed_components` → `missing_components` → ...
+- Stability flags documentation in README — added a table explaining each stability audit flag (`converged`, `revision_consistent`, `pods_healthy`, `scheduling_complete`, `job_complete`, `errors`)
 
 ## [1.0.7] - 2026-04-14
 
