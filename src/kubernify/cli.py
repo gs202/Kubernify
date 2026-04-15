@@ -595,7 +595,7 @@ def generate_report(
     """Generate the final verification report.
 
     Args:
-        overall_status: Overall verification status (PASS / FAIL / TIMEOUT).
+        overall_status: Overall verification status (PASS / FAIL).
         verification_results: Structured results produced by ``verify_versions``.
         stability_results: Mapping of workload keys to their stability audit results.
         missing_components: List of component-level error messages.
@@ -624,12 +624,14 @@ def generate_report(
 
     for component, comp_result in verification_results.components.items():
         if comp_result.status == VerificationStatus.FAIL.value:
-            summary.failed_components += 1
+            summary.version_mismatched_components += 1
 
         comp_report = ComponentReport(
             status=comp_result.status,
             errors=comp_result.errors,
         )
+
+        component_has_stability_errors = False
 
         for w_entry in comp_result.workloads:
             w_key = f"{w_entry.type}/{w_entry.workload}"
@@ -655,12 +657,28 @@ def generate_report(
 
             if has_stability_errors:
                 summary.unstable_workloads += 1
+                component_has_stability_errors = True
 
             # Only include workloads with failures (version or stability)
             if has_version_failure or has_stability_errors:
                 comp_report.workloads.append(w_report)
 
+        if component_has_stability_errors:
+            comp_report.status = VerificationStatus.FAIL.value
+
         report.details[component] = comp_report
+
+    summary.failed_components = sum(
+        1
+        for v in report.details.values()
+        if isinstance(v, ComponentReport) and v.status == VerificationStatus.FAIL.value
+    )
+
+    summary.passing_components = sum(
+        1
+        for v in report.details.values()
+        if isinstance(v, ComponentReport) and v.status == VerificationStatus.PASS.value
+    )
 
     if missing_components:
         report.details["_missing_components"] = missing_components
@@ -909,7 +927,7 @@ def run_verification(args: argparse.Namespace) -> int:
         args: Parsed CLI arguments.
 
     Returns:
-        Process exit code (0 = PASS, 1 = FAIL, 2 = TIMEOUT).
+        Process exit code (0 = PASS, 1 = FAIL).
     """
     start_time = time.time()
 
@@ -960,7 +978,7 @@ def run_verification(args: argparse.Namespace) -> int:
     while True:
         if time.time() - start_time > args.timeout:
             logger.error("Global timeout reached")
-            overall_status = VerificationStatus.TIMEOUT
+            overall_status = VerificationStatus.FAIL
             break
 
         logger.info("Discovering cluster state...")

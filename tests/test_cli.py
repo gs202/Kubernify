@@ -14,10 +14,19 @@ from kubernify.cli import (
     _resolve_component,
     _setup_logging,
     build_reverse_alias_map,
+    generate_report,
     load_component_aliases,
     load_manifest,
     parse_args,
     run_verification,
+)
+from kubernify.models import (
+    ComponentReport,
+    ComponentVerificationResult,
+    StabilityAuditResult,
+    VerificationResult,
+    VerificationStatus,
+    VersionVerificationResults,
 )
 
 # ---------------------------------------------------------------------------
@@ -662,8 +671,8 @@ class TestRunVerification:
 
         assert exit_code == 1
 
-    def test_timeout_returns_exit_code_2(self) -> None:
-        """Verify run_verification returns exit code 2 when timeout is exceeded."""
+    def test_timeout_returns_exit_code_1(self) -> None:
+        """Verify run_verification returns exit code 1 when timeout is exceeded."""
         args = argparse.Namespace(
             manifest='{"backend": "v1.2.3"}',
             context="test-context",
@@ -711,7 +720,7 @@ class TestRunVerification:
         ):
             exit_code = run_verification(args=args)
 
-        assert exit_code == 2
+        assert exit_code == 1
 
     def test_dry_run_zero_replicas_for_named_workload_passes(self) -> None:
         """Verify --dry-run with allow_zero_replicas_for passes for named zero-replica workload."""
@@ -1018,3 +1027,302 @@ class TestIgnoreTombstonePodsFlag:
             ]
         )
         assert args.ignore_tombstone_pods is True
+
+
+# ---------------------------------------------------------------------------
+# generate_report tests
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateReport:
+    """Tests for ``generate_report`` covering version/stability status logic and summary counters."""
+
+    @staticmethod
+    def _make_verification_results(
+        component_name: str,
+        workload_name: str,
+        workload_type: str,
+        container: str,
+        status: VerificationStatus,
+        error: str | None = None,
+    ) -> VersionVerificationResults:
+        """Build a minimal ``VersionVerificationResults`` with one component and one workload."""
+        workload = VerificationResult(
+            workload=workload_name,
+            type=workload_type,
+            container=container,
+            status=status,
+            error=error,
+        )
+        comp = ComponentVerificationResult(
+            status=status.value,
+            errors=[error] if error else [],
+            workloads=[workload],
+        )
+        return VersionVerificationResults(
+            errors=[error] if error else [],
+            components={component_name: comp},
+        )
+
+    @staticmethod
+    def _make_stability(
+        workload_key: str,
+        *,
+        has_errors: bool = False,
+    ) -> dict[str, StabilityAuditResult]:
+        """Build a stability results dict for a single workload key."""
+        return {
+            workload_key: StabilityAuditResult(
+                converged=True,
+                revision_consistent=True,
+                pods_healthy=not has_errors,
+                scheduling_complete=True,
+                errors=["pod restart threshold exceeded"] if has_errors else [],
+            ),
+        }
+
+    # -- Scenario 1: version PASS + stability errors → FAIL -----------------
+
+    def test_version_pass_with_stability_errors(self) -> None:
+        """Component with version PASS + stability errors → status FAIL.
+
+        ``version_mismatched_components`` should be 0, ``failed_components`` should be 1.
+        """
+        vr = self._make_verification_results(
+            component_name="backend",
+            workload_name="backend-deploy",
+            workload_type="Deployment",
+            container="backend",
+            status=VerificationStatus.PASS,
+        )
+        stability = self._make_stability("Deployment/backend-deploy", has_errors=True)
+
+        report = generate_report(
+            overall_status=VerificationStatus.FAIL,
+            verification_results=vr,
+            stability_results=stability,
+            missing_components=[],
+            missing_workloads=[],
+            context="test-ctx",
+            namespace="default",
+        )
+
+        comp = report.details["backend"]
+        assert isinstance(comp, ComponentReport)
+        assert comp.status == VerificationStatus.FAIL.value
+        assert report.summary.version_mismatched_components == 0
+        assert report.summary.failed_components == 1
+        assert report.summary.passing_components == 0
+        assert report.summary.unstable_workloads == 1
+
+    # -- Scenario 2: version FAIL + stability errors → FAIL -----------------
+
+    def test_version_fail_with_stability_errors(self) -> None:
+        """Component with version FAIL + stability errors → status FAIL.
+
+        ``version_mismatched_components`` should be 1, ``failed_components`` should be 1.
+        """
+        vr = self._make_verification_results(
+            component_name="backend",
+            workload_name="backend-deploy",
+            workload_type="Deployment",
+            container="backend",
+            status=VerificationStatus.FAIL,
+            error="expected v1.2.0, got v1.1.0",
+        )
+        stability = self._make_stability("Deployment/backend-deploy", has_errors=True)
+
+        report = generate_report(
+            overall_status=VerificationStatus.FAIL,
+            verification_results=vr,
+            stability_results=stability,
+            missing_components=[],
+            missing_workloads=[],
+            context="test-ctx",
+            namespace="default",
+        )
+
+        comp = report.details["backend"]
+        assert isinstance(comp, ComponentReport)
+        assert comp.status == VerificationStatus.FAIL.value
+        assert report.summary.version_mismatched_components == 1
+        assert report.summary.failed_components == 1
+        assert report.summary.passing_components == 0
+        assert report.summary.unstable_workloads == 1
+
+    # -- Scenario 3: version FAIL + no stability errors → FAIL --------------
+
+    def test_version_fail_no_stability_errors(self) -> None:
+        """Component with version FAIL + no stability errors → status stays FAIL.
+
+        ``version_mismatched_components`` should be 1, ``failed_components`` should be 1.
+        """
+        vr = self._make_verification_results(
+            component_name="backend",
+            workload_name="backend-deploy",
+            workload_type="Deployment",
+            container="backend",
+            status=VerificationStatus.FAIL,
+            error="expected v1.2.0, got v1.1.0",
+        )
+        stability = self._make_stability("Deployment/backend-deploy", has_errors=False)
+
+        report = generate_report(
+            overall_status=VerificationStatus.FAIL,
+            verification_results=vr,
+            stability_results=stability,
+            missing_components=[],
+            missing_workloads=[],
+            context="test-ctx",
+            namespace="default",
+        )
+
+        comp = report.details["backend"]
+        assert isinstance(comp, ComponentReport)
+        assert comp.status == VerificationStatus.FAIL.value
+        assert report.summary.version_mismatched_components == 1
+        assert report.summary.failed_components == 1
+        assert report.summary.passing_components == 0
+        assert report.summary.unstable_workloads == 0
+
+    # -- Scenario 4: version PASS + no stability errors → PASS --------------
+
+    def test_version_pass_no_stability_errors(self) -> None:
+        """Component with version PASS + no stability errors → status stays PASS.
+
+        Both counters should be 0.
+        """
+        vr = self._make_verification_results(
+            component_name="backend",
+            workload_name="backend-deploy",
+            workload_type="Deployment",
+            container="backend",
+            status=VerificationStatus.PASS,
+        )
+        stability = self._make_stability("Deployment/backend-deploy", has_errors=False)
+
+        report = generate_report(
+            overall_status=VerificationStatus.PASS,
+            verification_results=vr,
+            stability_results=stability,
+            missing_components=[],
+            missing_workloads=[],
+            context="test-ctx",
+            namespace="default",
+        )
+
+        comp = report.details["backend"]
+        assert isinstance(comp, ComponentReport)
+        assert comp.status == VerificationStatus.PASS.value
+        assert report.summary.version_mismatched_components == 0
+        assert report.summary.failed_components == 0
+        assert report.summary.passing_components == 1
+        assert report.summary.unstable_workloads == 0
+
+    # -- Scenario 5: all workloads skipped → status unchanged ---------------
+
+    def test_all_workloads_skipped(self) -> None:
+        """When all workloads are SKIPPED, component_has_stability_errors stays False.
+
+        Status should remain as the original verification status (PASS).
+        """
+        workload = VerificationResult(
+            workload="backend-deploy",
+            type="Deployment",
+            container="backend",
+            status=VerificationStatus.SKIPPED,
+        )
+        comp = ComponentVerificationResult(
+            status=VerificationStatus.PASS.value,
+            errors=[],
+            workloads=[workload],
+        )
+        vr = VersionVerificationResults(errors=[], components={"backend": comp})
+
+        report = generate_report(
+            overall_status=VerificationStatus.PASS,
+            verification_results=vr,
+            stability_results={},
+            missing_components=[],
+            missing_workloads=[],
+            context="test-ctx",
+            namespace="default",
+        )
+
+        comp_report = report.details["backend"]
+        assert isinstance(comp_report, ComponentReport)
+        assert comp_report.status == VerificationStatus.PASS.value
+        assert report.summary.version_mismatched_components == 0
+        assert report.summary.failed_components == 0
+        assert report.summary.passing_components == 1
+
+    # -- Scenario: multi-component counter aggregation ----------------------
+
+    def test_multi_component_counter_aggregation(self) -> None:
+        """Counters aggregate correctly across multiple components.
+
+        - "api": version FAIL (mismatch), no stability errors
+        - "worker": version PASS, but has stability errors → promoted to FAIL
+
+        Expected:
+        - ``version_mismatched_components == 1`` (only "api")
+        - ``failed_components == 2`` (both "api" and "worker")
+        - ``unstable_workloads == 1`` (only "worker")
+        """
+        # -- "api" component: version FAIL, no stability errors --
+        api_workload = VerificationResult(
+            workload="api-deploy",
+            type="Deployment",
+            container="api",
+            status=VerificationStatus.FAIL,
+            error="expected v2.0.0, got v1.0.0",
+        )
+        api_comp = ComponentVerificationResult(
+            status=VerificationStatus.FAIL.value,
+            errors=["expected v2.0.0, got v1.0.0"],
+            workloads=[api_workload],
+        )
+
+        # -- "worker" component: version PASS, stability errors --
+        worker_workload = VerificationResult(
+            workload="worker-deploy",
+            type="Deployment",
+            container="worker",
+            status=VerificationStatus.PASS,
+        )
+        worker_comp = ComponentVerificationResult(
+            status=VerificationStatus.PASS.value,
+            errors=[],
+            workloads=[worker_workload],
+        )
+
+        vr = VersionVerificationResults(
+            errors=["expected v2.0.0, got v1.0.0"],
+            components={"api": api_comp, "worker": worker_comp},
+        )
+
+        stability: dict[str, StabilityAuditResult] = {
+            **self._make_stability("Deployment/api-deploy", has_errors=False),
+            **self._make_stability("Deployment/worker-deploy", has_errors=True),
+        }
+
+        report = generate_report(
+            overall_status=VerificationStatus.FAIL,
+            verification_results=vr,
+            stability_results=stability,
+            missing_components=[],
+            missing_workloads=[],
+            context="test-ctx",
+            namespace="default",
+        )
+
+        assert report.summary.version_mismatched_components == 1
+        assert report.summary.failed_components == 2
+        assert report.summary.passing_components == 0
+        assert report.summary.unstable_workloads == 1
+        api_detail = report.details["api"]
+        assert isinstance(api_detail, ComponentReport)
+        assert api_detail.status == VerificationStatus.FAIL.value
+        worker_detail = report.details["worker"]
+        assert isinstance(worker_detail, ComponentReport)
+        assert worker_detail.status == VerificationStatus.FAIL.value

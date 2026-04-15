@@ -53,7 +53,7 @@ kubernify \
   --manifest '{"backend": "v1.2.3", "frontend": "v1.2.4"}'
 ```
 
-kubernify will connect to the cluster, discover all matching workloads, verify their image versions against the manifest, run stability audits, and exit with code `0` (pass), `1` (fail), or `2` (timeout).
+kubernify will connect to the cluster, discover all matching workloads, verify their image versions against the manifest, run stability audits, and exit with code `0` (pass) or `1` (fail).
 
 ---
 
@@ -75,7 +75,7 @@ kubernify [OPTIONS]
 | `--skip-containers` | Comma-separated **substring** patterns to skip during verification. Each pattern is matched against both container names and workload names using substring containment (e.g., `backend` matches `my-app-backend`). Skipped workloads are excluded from both version verification and stability audits. |  |
 | `--min-uptime` | Minimum pod uptime in seconds for stability checks. Pods running for less than this duration are flagged as unstable. | `0` |
 | `--restart-threshold` | Maximum acceptable container restart count. Containers exceeding this threshold are flagged as unstable. Use `0` to forbid any restarts, or `-1` to skip the restart check entirely. | `3` |
-| `--timeout` | Global timeout in seconds for the verification loop. The tool retries discovery and verification until all checks pass or this timeout is reached. Returns exit code `2` on timeout. | `300` |
+| `--timeout` | Global timeout in seconds for the verification loop. The tool retries discovery and verification until all checks pass or this timeout is reached. Returns exit code `1` (FAIL) on timeout. | `300` |
 | `--allow-zero-replicas` | Allow **all** workloads with zero running replicas to pass verification (version is still checked via the pod spec template). Mutually exclusive with `--allow-zero-replicas-for`. | `false` |
 | `--allow-zero-replicas-for` | Comma-separated list of workload name **patterns** allowed to have 0 running replicas (e.g., `my-cronjob-worker,batch-processor`). Uses **substring matching**: `my-worker` matches `ns-123-my-worker`. Mutually exclusive with `--allow-zero-replicas`. |  |
 | `--dry-run` | Perform a single snapshot check against the current cluster state without waiting for convergence. Exits immediately with pass/fail result. | `false` |
@@ -273,8 +273,115 @@ Given these workloads in the cluster:
 | Code | Meaning | Description |
 |------|---------|-------------|
 | `0` | **PASS** | All workloads match the manifest and pass stability audits |
-| `1` | **FAIL** | One or more workloads have version mismatches or stability issues |
-| `2` | **TIMEOUT** | Verification did not converge within the `--timeout` window |
+| `1` | **FAIL** | One or more workloads have version mismatches, stability issues, or the verification timed out |
+
+---
+
+## Report Output
+
+kubernify outputs a structured JSON report to stdout. The report contains:
+
+- **`timestamp`** — ISO 8601 UTC timestamp of report generation
+- **`context`** — Kubeconfig context name of the verified cluster
+- **`namespace`** — Kubernetes namespace that was inspected
+- **`status`** — Overall verification status (`PASS` or `FAIL`)
+- **`summary`** — Aggregated counts (see below)
+- **`details`** — Per-component verification details
+
+### Summary Fields
+
+| Field | Description |
+|-------|-------------|
+| `total_components` | Total number of components in the manifest |
+| `passing_components` | Components in PASS state (version match and stable workloads) |
+| `failed_components` | Total components in FAIL state (version mismatch or stability failure) |
+| `missing_components` | Components in the manifest not found in the cluster |
+| `missing_workloads` | Expected workloads not found during discovery |
+| `version_mismatched_components` | Components where at least one workload has a version mismatch |
+| `unstable_workloads` | Individual workloads with stability audit errors (pods not ready, convergence issues, etc.) |
+| `skipped_containers` | Containers excluded from verification by skip patterns |
+
+### Component Details
+
+Each component in `details` contains:
+
+- **`status`** — `PASS` or `FAIL`. A component is `FAIL` if it has version mismatches OR stability errors.
+- **`errors`** — List of version-level error messages
+- **`workloads`** — List of workloads with failures (only workloads with issues are included)
+
+Each workload entry contains:
+
+- **`name`** — Kubernetes workload name
+- **`type`** — Workload type (Deployment, StatefulSet, DaemonSet, Job)
+- **`container`** — Container name
+- **`version_error`** — Version mismatch error (null if version matches)
+- **`stability`** — Stability audit result with boolean checks and error list
+
+### Stability Flags
+
+Each workload's `stability` object contains the following fields:
+
+| Flag | Description |
+|------|-------------|
+| `converged` | Whether the controller has processed the latest spec changes (`observedGeneration >= generation`). Applies to Deployments, StatefulSets, and DaemonSets. Always `true` for Jobs and CronJobs. |
+| `revision_consistent` | Whether all pods have the expected revision hash (`pod-template-hash` for Deployments, `controller-revision-hash` for StatefulSets/DaemonSets). Detects stale pods from previous rollouts. Always `true` for Jobs and CronJobs. |
+| `pods_healthy` | Whether all pods are Ready, not terminating, within restart thresholds, and not in error states (`CrashLoopBackOff`, `ImagePullBackOff`). Also checks minimum uptime if configured via `--min-uptime`. |
+| `scheduling_complete` | Whether DaemonSet scheduling is satisfied (available and updated pods >= desired count). Always `true` for non-DaemonSet workloads. |
+| `job_complete` | Whether a Job has succeeded without exceeding its backoff limit. Always `true` for non-Job workloads. |
+| `errors` | List of specific error messages explaining why any of the above checks failed. Empty when all checks pass. |
+
+### Example Output
+
+```json
+{
+  "timestamp": "2025-01-15T10:30:00.000000+00:00",
+  "context": "my-cluster-context",
+  "namespace": "production",
+  "status": "FAIL",
+  "summary": {
+    "total_components": 2,
+    "passing_components": 1,
+    "failed_components": 1,
+    "missing_components": 0,
+    "missing_workloads": 0,
+    "version_mismatched_components": 0,
+    "unstable_workloads": 1,
+    "skipped_containers": 0
+  },
+  "details": {
+    "frontend": {
+      "status": "PASS",
+      "errors": [],
+      "workloads": []
+    },
+    "backend": {
+      "status": "FAIL",
+      "errors": [],
+      "workloads": [
+        {
+          "name": "my-app-backend",
+          "type": "Deployment",
+          "container": "backend",
+          "version_error": null,
+          "stability": {
+            "converged": true,
+            "revision_consistent": true,
+            "pods_healthy": false,
+            "scheduling_complete": true,
+            "job_complete": true,
+            "errors": [
+              "Pod my-app-backend-7f8b9c6d4-x2k9m is not Ready",
+              "Deployment availability insufficient: 0/1 pods available (0 ready; tombstone pods excluded by Kubernetes controller)"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+> **Note:** `version_mismatched_components` counts only components with version verification failures. `failed_components` counts all components in FAIL state, including those that passed version verification but have unstable workloads. A component's status is `FAIL` if **either** its version verification failed **or** any of its workloads have stability errors.
 
 ---
 
