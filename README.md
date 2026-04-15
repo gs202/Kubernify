@@ -53,7 +53,7 @@ kubernify \
   --manifest '{"backend": "v1.2.3", "frontend": "v1.2.4"}'
 ```
 
-kubernify will connect to the cluster, discover all matching workloads, verify their image versions against the manifest, run stability audits, and exit with code `0` (pass), `1` (fail), or `2` (timeout).
+kubernify will connect to the cluster, discover all matching workloads, verify their image versions against the manifest, run stability audits, and exit with code `0` (pass) or `1` (fail).
 
 ---
 
@@ -75,7 +75,7 @@ kubernify [OPTIONS]
 | `--skip-containers` | Comma-separated **substring** patterns to skip during verification. Each pattern is matched against both container names and workload names using substring containment (e.g., `backend` matches `my-app-backend`). Skipped workloads are excluded from both version verification and stability audits. |  |
 | `--min-uptime` | Minimum pod uptime in seconds for stability checks. Pods running for less than this duration are flagged as unstable. | `0` |
 | `--restart-threshold` | Maximum acceptable container restart count. Containers exceeding this threshold are flagged as unstable. Use `0` to forbid any restarts, or `-1` to skip the restart check entirely. | `3` |
-| `--timeout` | Global timeout in seconds for the verification loop. The tool retries discovery and verification until all checks pass or this timeout is reached. Returns exit code `2` on timeout. | `300` |
+| `--timeout` | Global timeout in seconds for the verification loop. The tool retries discovery and verification until all checks pass or this timeout is reached. Returns exit code `1` (FAIL) on timeout. | `300` |
 | `--allow-zero-replicas` | Allow **all** workloads with zero running replicas to pass verification (version is still checked via the pod spec template). Mutually exclusive with `--allow-zero-replicas-for`. | `false` |
 | `--allow-zero-replicas-for` | Comma-separated list of workload name **patterns** allowed to have 0 running replicas (e.g., `my-cronjob-worker,batch-processor`). Uses **substring matching**: `my-worker` matches `ns-123-my-worker`. Mutually exclusive with `--allow-zero-replicas`. |  |
 | `--dry-run` | Perform a single snapshot check against the current cluster state without waiting for convergence. Exits immediately with pass/fail result. | `false` |
@@ -273,8 +273,7 @@ Given these workloads in the cluster:
 | Code | Meaning | Description |
 |------|---------|-------------|
 | `0` | **PASS** | All workloads match the manifest and pass stability audits |
-| `1` | **FAIL** | One or more workloads have version mismatches or stability issues |
-| `2` | **TIMEOUT** | Verification did not converge within the `--timeout` window |
+| `1` | **FAIL** | One or more workloads have version mismatches, stability issues, or the verification timed out |
 
 ---
 
@@ -285,7 +284,7 @@ kubernify outputs a structured JSON report to stdout. The report contains:
 - **`timestamp`** — ISO 8601 UTC timestamp of report generation
 - **`context`** — Kubeconfig context name of the verified cluster
 - **`namespace`** — Kubernetes namespace that was inspected
-- **`status`** — Overall verification status (`PASS`, `FAIL`, or `TIMEOUT`)
+- **`status`** — Overall verification status (`PASS` or `FAIL`)
 - **`summary`** — Aggregated counts (see below)
 - **`details`** — Per-component verification details
 
@@ -324,7 +323,7 @@ Each workload entry contains:
   "timestamp": "2025-01-15T10:30:00.000000+00:00",
   "context": "my-cluster-context",
   "namespace": "production",
-  "status": "TIMEOUT",
+  "status": "FAIL",
   "summary": {
     "total_components": 2,
     "missing_components": 0,

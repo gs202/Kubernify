@@ -671,8 +671,8 @@ class TestRunVerification:
 
         assert exit_code == 1
 
-    def test_timeout_returns_exit_code_2(self) -> None:
-        """Verify run_verification returns exit code 2 when timeout is exceeded."""
+    def test_timeout_returns_exit_code_1(self) -> None:
+        """Verify run_verification returns exit code 1 when timeout is exceeded."""
         args = argparse.Namespace(
             manifest='{"backend": "v1.2.3"}',
             context="test-context",
@@ -720,7 +720,7 @@ class TestRunVerification:
         ):
             exit_code = run_verification(args=args)
 
-        assert exit_code == 2
+        assert exit_code == 1
 
     def test_dry_run_zero_replicas_for_named_workload_passes(self) -> None:
         """Verify --dry-run with allow_zero_replicas_for passes for named zero-replica workload."""
@@ -1249,34 +1249,6 @@ class TestGenerateReport:
         assert isinstance(comp_report, ComponentReport)
         assert comp_report.status == VerificationStatus.PASS.value
         assert report.summary.version_mismatched_components == 0
-        assert report.summary.failed_components == 0
-
-    # -- Guard: TIMEOUT status is not downgraded to FAIL --------------------
-
-    def test_timeout_not_downgraded_by_stability_errors(self) -> None:
-        """TIMEOUT status must not be overwritten to FAIL by stability errors."""
-        vr = self._make_verification_results(
-            component_name="backend",
-            workload_name="backend-deploy",
-            workload_type="Deployment",
-            container="backend",
-            status=VerificationStatus.TIMEOUT,
-        )
-        stability = self._make_stability("Deployment/backend-deploy", has_errors=True)
-
-        report = generate_report(
-            overall_status=VerificationStatus.TIMEOUT,
-            verification_results=vr,
-            stability_results=stability,
-            missing_components=[],
-            missing_workloads=[],
-            context="test-ctx",
-            namespace="default",
-        )
-
-        comp = report.details["backend"]
-        assert isinstance(comp, ComponentReport)
-        assert comp.status == VerificationStatus.TIMEOUT.value
         assert report.summary.failed_components == 0
 
     # -- Scenario: multi-component counter aggregation ----------------------
