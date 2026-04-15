@@ -1112,6 +1112,7 @@ class TestGenerateReport:
         assert comp.status == VerificationStatus.FAIL.value
         assert report.summary.version_mismatched_components == 0
         assert report.summary.failed_components == 1
+        assert report.summary.passing_components == 0
         assert report.summary.unstable_workloads == 1
 
     # -- Scenario 2: version FAIL + stability errors → FAIL -----------------
@@ -1146,6 +1147,7 @@ class TestGenerateReport:
         assert comp.status == VerificationStatus.FAIL.value
         assert report.summary.version_mismatched_components == 1
         assert report.summary.failed_components == 1
+        assert report.summary.passing_components == 0
         assert report.summary.unstable_workloads == 1
 
     # -- Scenario 3: version FAIL + no stability errors → FAIL --------------
@@ -1180,6 +1182,7 @@ class TestGenerateReport:
         assert comp.status == VerificationStatus.FAIL.value
         assert report.summary.version_mismatched_components == 1
         assert report.summary.failed_components == 1
+        assert report.summary.passing_components == 0
         assert report.summary.unstable_workloads == 0
 
     # -- Scenario 4: version PASS + no stability errors → PASS --------------
@@ -1213,6 +1216,7 @@ class TestGenerateReport:
         assert comp.status == VerificationStatus.PASS.value
         assert report.summary.version_mismatched_components == 0
         assert report.summary.failed_components == 0
+        assert report.summary.passing_components == 1
         assert report.summary.unstable_workloads == 0
 
     # -- Scenario 5: all workloads skipped → status unchanged ---------------
@@ -1250,6 +1254,7 @@ class TestGenerateReport:
         assert comp_report.status == VerificationStatus.PASS.value
         assert report.summary.version_mismatched_components == 0
         assert report.summary.failed_components == 0
+        assert report.summary.passing_components == 1
 
     # -- Scenario: multi-component counter aggregation ----------------------
 
@@ -1313,6 +1318,7 @@ class TestGenerateReport:
 
         assert report.summary.version_mismatched_components == 1
         assert report.summary.failed_components == 2
+        assert report.summary.passing_components == 0
         assert report.summary.unstable_workloads == 1
         api_detail = report.details["api"]
         assert isinstance(api_detail, ComponentReport)

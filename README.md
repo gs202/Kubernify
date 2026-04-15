@@ -293,10 +293,11 @@ kubernify outputs a structured JSON report to stdout. The report contains:
 | Field | Description |
 |-------|-------------|
 | `total_components` | Total number of components in the manifest |
+| `passing_components` | Components in PASS state (version match and stable workloads) |
+| `failed_components` | Total components in FAIL state (version mismatch or stability failure) |
 | `missing_components` | Components in the manifest not found in the cluster |
 | `missing_workloads` | Expected workloads not found during discovery |
 | `version_mismatched_components` | Components where at least one workload has a version mismatch |
-| `failed_components` | Total components in FAIL state (version mismatch or stability failure) |
 | `unstable_workloads` | Individual workloads with stability audit errors (pods not ready, convergence issues, etc.) |
 | `skipped_containers` | Containers excluded from verification by skip patterns |
 
@@ -326,10 +327,11 @@ Each workload entry contains:
   "status": "FAIL",
   "summary": {
     "total_components": 2,
+    "passing_components": 1,
+    "failed_components": 1,
     "missing_components": 0,
     "missing_workloads": 0,
     "version_mismatched_components": 0,
-    "failed_components": 1,
     "unstable_workloads": 1,
     "skipped_containers": 0
   },
