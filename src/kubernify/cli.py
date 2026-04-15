@@ -674,6 +674,12 @@ def generate_report(
         if isinstance(v, ComponentReport) and v.status == VerificationStatus.FAIL.value
     )
 
+    summary.passing_components = sum(
+        1
+        for v in report.details.values()
+        if isinstance(v, ComponentReport) and v.status == VerificationStatus.PASS.value
+    )
+
     if missing_components:
         report.details["_missing_components"] = missing_components
     if missing_workloads:

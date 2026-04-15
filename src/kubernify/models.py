@@ -190,10 +190,11 @@ class ReportSummary:
     """Aggregated counts for the verification report."""
 
     total_components: int = 0  # total number of components in the manifest
+    passing_components: int = 0  # components in PASS state (version match + stable)
+    failed_components: int = 0  # total components in FAIL state (version + stability)
     missing_components: int = 0  # components in the manifest not found in the cluster
     missing_workloads: int = 0  # expected workloads not found during discovery
     version_mismatched_components: int = 0  # components that failed version verification
-    failed_components: int = 0  # total components in FAIL state (version + stability)
     unstable_workloads: int = 0  # workloads with stability audit errors (pods not ready, convergence issues, etc.)
     skipped_containers: int = 0  # containers excluded from verification by skip patterns
 
