@@ -624,12 +624,14 @@ def generate_report(
 
     for component, comp_result in verification_results.components.items():
         if comp_result.status == VerificationStatus.FAIL.value:
-            summary.failed_components += 1
+            summary.version_mismatched_components += 1
 
         comp_report = ComponentReport(
             status=comp_result.status,
             errors=comp_result.errors,
         )
+
+        component_has_stability_errors = False
 
         for w_entry in comp_result.workloads:
             w_key = f"{w_entry.type}/{w_entry.workload}"
@@ -655,12 +657,22 @@ def generate_report(
 
             if has_stability_errors:
                 summary.unstable_workloads += 1
+                component_has_stability_errors = True
 
             # Only include workloads with failures (version or stability)
             if has_version_failure or has_stability_errors:
                 comp_report.workloads.append(w_report)
 
+        if component_has_stability_errors and comp_report.status != VerificationStatus.TIMEOUT.value:
+            comp_report.status = VerificationStatus.FAIL.value
+
         report.details[component] = comp_report
+
+    summary.failed_components = sum(
+        1
+        for v in report.details.values()
+        if isinstance(v, ComponentReport) and v.status == VerificationStatus.FAIL.value
+    )
 
     if missing_components:
         report.details["_missing_components"] = missing_components
