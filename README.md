@@ -317,6 +317,19 @@ Each workload entry contains:
 - **`version_error`** — Version mismatch error (null if version matches)
 - **`stability`** — Stability audit result with boolean checks and error list
 
+### Stability Flags
+
+Each workload's `stability` object contains the following fields:
+
+| Flag | Description |
+|------|-------------|
+| `converged` | Whether the controller has processed the latest spec changes (`observedGeneration >= generation`). Applies to Deployments, StatefulSets, and DaemonSets. Always `true` for Jobs and CronJobs. |
+| `revision_consistent` | Whether all pods have the expected revision hash (`pod-template-hash` for Deployments, `controller-revision-hash` for StatefulSets/DaemonSets). Detects stale pods from previous rollouts. Always `true` for Jobs and CronJobs. |
+| `pods_healthy` | Whether all pods are Ready, not terminating, within restart thresholds, and not in error states (`CrashLoopBackOff`, `ImagePullBackOff`). Also checks minimum uptime if configured via `--min-uptime`. |
+| `scheduling_complete` | Whether DaemonSet scheduling is satisfied (available and updated pods >= desired count). Always `true` for non-DaemonSet workloads. |
+| `job_complete` | Whether a Job has succeeded without exceeding its backoff limit. Always `true` for non-Job workloads. |
+| `errors` | List of specific error messages explaining why any of the above checks failed. Empty when all checks pass. |
+
 ### Example Output
 
 ```json
