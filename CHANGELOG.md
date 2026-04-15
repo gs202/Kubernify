@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING:** Removed `TIMEOUT` from `VerificationStatus` enum. Timeout now produces `FAIL` (exit code `1`) instead of `TIMEOUT` (exit code `2`). This simplifies the exit code contract to `0` (pass) / `1` (fail).
+
 ## [1.0.7] - 2026-04-14
 
 ### Fixed
