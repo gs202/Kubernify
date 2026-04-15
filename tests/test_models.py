@@ -22,10 +22,9 @@ class TestVerificationStatus:
     """Tests for ``VerificationStatus`` enum and exit code mapping."""
 
     def test_verification_status_exit_codes(self) -> None:
-        """Verify exit codes: PASS=0, FAIL=1, TIMEOUT=2, SKIPPED=1."""
+        """Verify exit codes: PASS=0, FAIL=1, SKIPPED=1."""
         assert VerificationStatus.PASS.exit_code == 0
         assert VerificationStatus.FAIL.exit_code == 1
-        assert VerificationStatus.TIMEOUT.exit_code == 2
         assert VerificationStatus.SKIPPED.exit_code == 1
 
 

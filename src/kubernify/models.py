@@ -50,7 +50,6 @@ class VerificationStatus(str, Enum):
 
     PASS = "PASS"  # noqa: S105
     FAIL = "FAIL"
-    TIMEOUT = "TIMEOUT"
     SKIPPED = "SKIPPED"
 
     @property
@@ -58,11 +57,11 @@ class VerificationStatus(str, Enum):
         """Return the process exit code for this verification status.
 
         Returns:
-            0 for PASS, 2 for TIMEOUT, 1 for everything else (FAIL, SKIPPED).
+            0 for PASS, 1 for everything else (FAIL, SKIPPED).
         """
         _EXIT_CODES: dict[VerificationStatus, int] = {
             VerificationStatus.PASS: 0,
-            VerificationStatus.TIMEOUT: 2,
+            VerificationStatus.FAIL: 1,
         }
         return _EXIT_CODES.get(self, 1)
 
@@ -190,12 +189,14 @@ class WorkloadInspectionResult:
 class ReportSummary:
     """Aggregated counts for the verification report."""
 
-    total_components: int = 0
-    missing_components: int = 0
-    missing_workloads: int = 0
-    failed_components: int = 0
-    unstable_workloads: int = 0
-    skipped_containers: int = 0
+    total_components: int = 0  # total number of components in the manifest
+    passing_components: int = 0  # components in PASS state (version match + stable)
+    failed_components: int = 0  # total components in FAIL state (version + stability)
+    missing_components: int = 0  # components in the manifest not found in the cluster
+    missing_workloads: int = 0  # expected workloads not found during discovery
+    version_mismatched_components: int = 0  # components that failed version verification
+    unstable_workloads: int = 0  # workloads with stability audit errors (pods not ready, convergence issues, etc.)
+    skipped_containers: int = 0  # containers excluded from verification by skip patterns
 
 
 @dataclass
@@ -226,7 +227,7 @@ class VerificationReport:
         timestamp: ISO 8601 UTC timestamp of report generation.
         context: Kubeconfig context name of the verified cluster.
         namespace: Kubernetes namespace that was inspected.
-        status: Overall verification status (PASS / FAIL / TIMEOUT).
+        status: Overall verification status (PASS / FAIL).
         summary: Aggregated counts of components, failures, etc.
         details: Per-component verification details keyed by component name.
             May also contain ``_missing_components`` and ``_missing_workloads``.
