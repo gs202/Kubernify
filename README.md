@@ -83,6 +83,7 @@ kubernify [OPTIONS]
 | `--include-daemonsets` | Include DaemonSets in workload discovery. By default, only Deployments are inspected. | `false` |
 | `--include-jobs` | Include Jobs and CronJobs in workload discovery. By default, only Deployments are inspected. | `false` |
 | `--ignore-tombstone-pods` | When set, pods in phase `Failed` or `Succeeded` (OOMKilled, Evicted, Completed scripts) are excluded from per-pod health checks. These "gray" pods do not cause health check failures. The deployment availability check (`available_replicas >= spec.replicas`) always runs regardless of this flag. | `false` |
+| `--output-file` | Path to save the JSON verification report to a file. The report is always printed to stdout regardless of this flag. Parent directories are created automatically if they don't exist. |  |
 
 ---
 
@@ -134,7 +135,8 @@ kubernify \
   --restart-threshold 5 \
   --ignore-tombstone-pods \
   --timeout 600 \
-  --allow-zero-replicas
+  --allow-zero-replicas \
+  --output-file report.json
   # OR selectively:
   # --allow-zero-replicas-for "worker, cron-handler"
 ```
@@ -148,6 +150,18 @@ kubernify \
   --manifest '{"backend": "v1.2.3"}' \
   --dry-run
 ```
+
+### Save Report to File
+
+```bash
+kubernify \
+  --context my-cluster-context \
+  --anchor my-app \
+  --manifest '{"backend": "v1.2.3"}' \
+  --output-file /tmp/kubernify-report.json
+```
+
+The report is always printed to stdout. When `--output-file` is provided, it is additionally saved to the specified path. Parent directories are created automatically.
 
 ### CI/CD Integration - GitHub Actions
 
@@ -279,7 +293,7 @@ Given these workloads in the cluster:
 
 ## Report Output
 
-kubernify outputs a structured JSON report to stdout. The report contains:
+kubernify outputs a structured JSON report to stdout. Use `--output-file` to additionally save the report to a file. The report contains:
 
 - **`timestamp`** — ISO 8601 UTC timestamp of report generation
 - **`context`** — Kubeconfig context name of the verified cluster
