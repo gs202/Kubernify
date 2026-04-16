@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -23,10 +25,12 @@ from kubernify.cli import (
 from kubernify.models import (
     ComponentReport,
     ComponentVerificationResult,
+    RevisionInfo,
     StabilityAuditResult,
     VerificationResult,
     VerificationStatus,
     VersionVerificationResults,
+    WorkloadInspectionResult,
 )
 
 # ---------------------------------------------------------------------------
@@ -126,6 +130,32 @@ class TestParseArgs:
         assert args.include_daemonsets is False
         assert args.include_jobs is False
         assert args.ignore_tombstone_pods is False
+
+    def test_parse_args_output_file_default_is_none(self) -> None:
+        """Verify --output-file defaults to None when not provided."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+            ]
+        )
+        assert args.output_file is None
+
+    def test_parse_args_output_file_explicit(self) -> None:
+        """Verify --output-file stores the provided path."""
+        args = parse_args(
+            [
+                "--manifest",
+                '{"backend": "v1.0.0"}',
+                "--anchor",
+                "my-app",
+                "--output-file",
+                "output/report.json",
+            ]
+        )
+        assert args.output_file == "output/report.json"
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +583,7 @@ class TestRunVerification:
             skip_containers=None,
             component_aliases=None,
             ignore_tombstone_pods=False,
+            output_file=None,
         )
 
         mock_controller = MagicMock()
@@ -623,6 +654,7 @@ class TestRunVerification:
             skip_containers=None,
             component_aliases=None,
             ignore_tombstone_pods=False,
+            output_file=None,
         )
 
         mock_controller = MagicMock()
@@ -692,6 +724,7 @@ class TestRunVerification:
             skip_containers=None,
             component_aliases=None,
             ignore_tombstone_pods=False,
+            output_file=None,
         )
 
         mock_controller = MagicMock()
@@ -743,6 +776,7 @@ class TestRunVerification:
             skip_containers=None,
             component_aliases=None,
             ignore_tombstone_pods=False,
+            output_file=None,
         )
 
         mock_controller = MagicMock()
@@ -1343,3 +1377,139 @@ class TestGenerateReport:
         # "worker" has stability errors surfaced to component-level errors
         assert any("pod restart threshold exceeded" in e for e in worker_detail.errors)
         assert any("worker-deploy:" in e for e in worker_detail.errors)
+
+
+# ---------------------------------------------------------------------------
+# Output file tests
+# ---------------------------------------------------------------------------
+
+
+class TestOutputFile:
+    """Tests for --output-file report saving behavior."""
+
+    @staticmethod
+    def _make_passing_dry_run_args(output_file: str | None = None) -> argparse.Namespace:
+        """Build args namespace for a passing dry-run scenario."""
+        return argparse.Namespace(
+            manifest='{"backend": "v1.2.3"}',
+            context="test-context",
+            gke_project=None,
+            namespace="default",
+            anchor="my-app",
+            timeout=300,
+            restart_threshold=3,
+            min_uptime=0,
+            allow_zero_replicas=False,
+            allow_zero_replicas_for=None,
+            dry_run=True,
+            include_statefulsets=False,
+            include_daemonsets=False,
+            include_jobs=False,
+            required_workloads=None,
+            skip_containers=None,
+            component_aliases=None,
+            ignore_tombstone_pods=False,
+            output_file=output_file,
+        )
+
+    @staticmethod
+    def _make_mock_workload() -> tuple[WorkloadInspectionResult, StabilityAuditResult]:
+        """Build mock workload and discovery objects for a passing scenario."""
+        mock_pod = MagicMock()
+        mock_pod.metadata.name = "backend-pod-xyz"
+        mock_pod.metadata.namespace = "default"
+        mock_pod.metadata.labels = {"app": "backend", "pod-template-hash": "abc12"}
+        mock_pod.metadata.deletion_timestamp = None
+        mock_pod.spec.node_name = "node-1"
+        mock_pod.spec.containers = [MagicMock(image="registry.example.com/org/my-app/backend:v1.2.3")]
+        mock_pod.spec.init_containers = None
+        mock_pod.status.phase = "Running"
+        mock_pod.status.pod_ip = "10.0.0.1"
+        mock_pod.status.start_time = "2025-01-01T00:00:00Z"
+
+        workload = WorkloadInspectionResult(
+            name="backend-deployment",
+            type="Deployment",
+            namespace="default",
+            latest_revision=RevisionInfo(hash="abc12"),
+            pods=[mock_pod],
+            pod_spec=mock_pod.spec,
+        )
+        stability = StabilityAuditResult(
+            converged=True,
+            revision_consistent=True,
+            pods_healthy=True,
+            scheduling_complete=True,
+            job_complete=True,
+            errors=[],
+        )
+        return workload, stability
+
+    def test_output_file_writes_report(self, tmp_path: Path) -> None:
+        """Verify --output-file writes the JSON report to the specified path."""
+        output_path = tmp_path / "report.json"
+        args = self._make_passing_dry_run_args(output_file=str(output_path))
+        workload, stability = self._make_mock_workload()
+
+        mock_controller = MagicMock()
+        mock_discovery = MagicMock()
+        mock_auditor = MagicMock()
+        mock_discovery.discover_cluster_state.return_value = ([workload], [])
+        mock_auditor.audit_workload.return_value = stability
+
+        with (
+            patch("kubernify.cli.KubernetesController", return_value=mock_controller),
+            patch("kubernify.cli.WorkloadDiscovery", return_value=mock_discovery),
+            patch("kubernify.cli.StabilityAuditor", return_value=mock_auditor),
+        ):
+            exit_code = run_verification(args=args)
+
+        assert exit_code == 0
+        assert output_path.exists()
+        report_data = json.loads(output_path.read_text(encoding="utf-8"))
+        assert report_data["status"] == "PASS"
+        assert "backend" in report_data["details"]
+
+    def test_output_file_creates_parent_directories(self, tmp_path: Path) -> None:
+        """Verify --output-file creates parent directories if they don't exist."""
+        output_path = tmp_path / "nested" / "dir" / "report.json"
+        args = self._make_passing_dry_run_args(output_file=str(output_path))
+        workload, stability = self._make_mock_workload()
+
+        mock_controller = MagicMock()
+        mock_discovery = MagicMock()
+        mock_auditor = MagicMock()
+        mock_discovery.discover_cluster_state.return_value = ([workload], [])
+        mock_auditor.audit_workload.return_value = stability
+
+        with (
+            patch("kubernify.cli.KubernetesController", return_value=mock_controller),
+            patch("kubernify.cli.WorkloadDiscovery", return_value=mock_discovery),
+            patch("kubernify.cli.StabilityAuditor", return_value=mock_auditor),
+        ):
+            exit_code = run_verification(args=args)
+
+        assert exit_code == 0
+        assert output_path.exists()
+
+    def test_no_output_file_does_not_create_file(self, tmp_path: Path) -> None:
+        """Verify no file is created when --output-file is not provided."""
+        args = self._make_passing_dry_run_args(output_file=None)
+        workload, stability = self._make_mock_workload()
+
+        mock_controller = MagicMock()
+        mock_discovery = MagicMock()
+        mock_auditor = MagicMock()
+        mock_discovery.discover_cluster_state.return_value = ([workload], [])
+        mock_auditor.audit_workload.return_value = stability
+
+        with (
+            patch("kubernify.cli.KubernetesController", return_value=mock_controller),
+            patch("kubernify.cli.WorkloadDiscovery", return_value=mock_discovery),
+            patch("kubernify.cli.StabilityAuditor", return_value=mock_auditor),
+        ):
+            exit_code = run_verification(args=args)
+
+        assert exit_code == 0
+        # No files should be created in tmp_path
+        assert list(tmp_path.iterdir()) == []

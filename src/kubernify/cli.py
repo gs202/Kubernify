@@ -20,6 +20,7 @@ import time
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from .image_parser import parse_image_reference
@@ -819,6 +820,11 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
             "always runs regardless of this flag."
         ),
     )
+    parser.add_argument(
+        "--output-file",
+        default=None,
+        help="Path to save the JSON verification report to a file (report is always printed to stdout)",
+    )
     return parser.parse_args(args)
 
 
@@ -1054,7 +1060,14 @@ def run_verification(args: argparse.Namespace) -> int:
             namespace=args.namespace,
             skipped_workload_names=skipped_workload_names,
         )
-        print(json.dumps(report.to_dict(), indent=2))
+        report_json = json.dumps(report.to_dict(), indent=2)
+        print(report_json)
+
+        if args.output_file:
+            output_path = Path(args.output_file)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(report_json + "\n", encoding="utf-8")
+            logger.info(f"Report saved to {output_path}")
     except Exception as e:
         logger.error(f"Failed to generate report: {e}")
         return 1
