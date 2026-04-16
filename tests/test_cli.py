@@ -1114,6 +1114,9 @@ class TestGenerateReport:
         assert report.summary.failed_components == 1
         assert report.summary.passing_components == 0
         assert report.summary.unstable_workloads == 1
+        # Stability errors must be surfaced in the component-level errors list
+        assert any("pod restart threshold exceeded" in e for e in comp.errors)
+        assert any("backend-deploy:" in e for e in comp.errors)
 
     # -- Scenario 2: version FAIL + stability errors → FAIL -----------------
 
@@ -1149,6 +1152,9 @@ class TestGenerateReport:
         assert report.summary.failed_components == 1
         assert report.summary.passing_components == 0
         assert report.summary.unstable_workloads == 1
+        # Both version and stability errors must appear in the component-level errors list
+        assert any("expected v1.2.0, got v1.1.0" in e for e in comp.errors)
+        assert any("pod restart threshold exceeded" in e for e in comp.errors)
 
     # -- Scenario 3: version FAIL + no stability errors → FAIL --------------
 
@@ -1184,6 +1190,9 @@ class TestGenerateReport:
         assert report.summary.failed_components == 1
         assert report.summary.passing_components == 0
         assert report.summary.unstable_workloads == 0
+        # Only version errors should be present — no stability errors
+        assert any("expected v1.2.0, got v1.1.0" in e for e in comp.errors)
+        assert not any("pod restart threshold exceeded" in e for e in comp.errors)
 
     # -- Scenario 4: version PASS + no stability errors → PASS --------------
 
@@ -1218,6 +1227,8 @@ class TestGenerateReport:
         assert report.summary.failed_components == 0
         assert report.summary.passing_components == 1
         assert report.summary.unstable_workloads == 0
+        # No errors at all
+        assert comp.errors == []
 
     # -- Scenario 5: all workloads skipped → status unchanged ---------------
 
@@ -1323,6 +1334,12 @@ class TestGenerateReport:
         api_detail = report.details["api"]
         assert isinstance(api_detail, ComponentReport)
         assert api_detail.status == VerificationStatus.FAIL.value
+        # "api" has version error only, no stability errors
+        assert any("expected v2.0.0, got v1.0.0" in e for e in api_detail.errors)
+        assert not any("pod restart threshold exceeded" in e for e in api_detail.errors)
         worker_detail = report.details["worker"]
         assert isinstance(worker_detail, ComponentReport)
         assert worker_detail.status == VerificationStatus.FAIL.value
+        # "worker" has stability errors surfaced to component-level errors
+        assert any("pod restart threshold exceeded" in e for e in worker_detail.errors)
+        assert any("worker-deploy:" in e for e in worker_detail.errors)
