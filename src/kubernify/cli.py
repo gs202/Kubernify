@@ -628,7 +628,7 @@ def generate_report(
 
         comp_report = ComponentReport(
             status=comp_result.status,
-            errors=comp_result.errors,
+            errors=list(comp_result.errors),
         )
 
         component_has_stability_errors = False
@@ -658,6 +658,8 @@ def generate_report(
             if has_stability_errors:
                 summary.unstable_workloads += 1
                 component_has_stability_errors = True
+                for err in stability_dict.get("errors", []):
+                    comp_report.errors.append(f"{w_entry.workload}: {err}")
 
             # Only include workloads with failures (version or stability)
             if has_version_failure or has_stability_errors:
