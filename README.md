@@ -82,7 +82,7 @@ kubernify [OPTIONS]
 | `--include-statefulsets` | Include StatefulSets in workload discovery. By default, only Deployments are inspected. | `false` |
 | `--include-daemonsets` | Include DaemonSets in workload discovery. By default, only Deployments are inspected. | `false` |
 | `--include-jobs` | Include Jobs and CronJobs in workload discovery. By default, only Deployments are inspected. | `false` |
-| `--ignore-tombstone-pods` | When set, pods in phase `Failed` or `Succeeded` (OOMKilled, Evicted, Completed scripts) are excluded from per-pod health checks. These "gray" pods do not cause health check failures. The deployment availability check (`available_replicas >= spec.replicas`) always runs regardless of this flag. | `false` |
+| `--ignore-tombstone-pods` | When set, pods in phase `Failed` or `Succeeded` (OOMKilled, Evicted, Completed scripts) are excluded from per-pod health checks, revision consistency checks, and container image extraction for version verification. These "gray" pods do not cause health check failures, false revision inconsistencies, or stale version reports. The deployment availability check (`available_replicas >= spec.replicas`) always runs regardless of this flag. | `false` |
 | `--output-file` | Path to save the JSON verification report to a file. The report is always printed to stdout regardless of this flag. Parent directories are created automatically if they don't exist. |  |
 
 ---

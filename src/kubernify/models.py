@@ -9,6 +9,41 @@ from typing import TypeAlias
 from kubernetes.client import V1CronJob, V1DaemonSet, V1Deployment, V1Job, V1Pod, V1PodSpec, V1StatefulSet
 
 # ---------------------------------------------------------------------------
+# Pod phase helpers — shared by stability_audit & cli
+# ---------------------------------------------------------------------------
+
+
+def is_tombstone_pod(pod: V1Pod) -> bool:
+    """Check if a pod is a tombstone (evicted, OOMKilled, completed).
+
+    Tombstone pods are in terminal phase ``Failed`` or ``Succeeded`` and
+    should typically be excluded from health, revision, and version checks.
+
+    Args:
+        pod: The Kubernetes pod to check.
+
+    Returns:
+        ``True`` if the pod is in a terminal phase.
+    """
+    return getattr(pod.status, "phase", None) in ("Failed", "Succeeded")
+
+
+def filter_active_pods(pods: list[V1Pod]) -> list[V1Pod]:
+    """Return only non-tombstone pods from the given list.
+
+    Convenience wrapper around :func:`is_tombstone_pod` for the common
+    pattern of filtering out evicted/failed/completed pods.
+
+    Args:
+        pods: List of Kubernetes pods to filter.
+
+    Returns:
+        List containing only pods not in terminal phase.
+    """
+    return [p for p in pods if not is_tombstone_pod(p)]
+
+
+# ---------------------------------------------------------------------------
 # Shared type alias — single definition used by stability_audit & workload_discovery
 # ---------------------------------------------------------------------------
 KubernetesWorkload: TypeAlias = V1Deployment | V1StatefulSet | V1DaemonSet | V1Job | V1CronJob
