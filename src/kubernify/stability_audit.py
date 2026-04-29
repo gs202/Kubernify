@@ -17,6 +17,7 @@ from .models import (
     StabilityAuditResult,
     WorkloadInspectionResult,
     WorkloadType,
+    filter_active_pods,
 )
 
 
@@ -236,10 +237,7 @@ class StabilityAuditor:
             result.converged = True
 
         # Filter tombstone pods when requested — used by both revision consistency and pod health checks
-        def _is_tombstone(pod: V1Pod) -> bool:
-            return getattr(pod.status, "phase", None) in ("Failed", "Succeeded")
-
-        pods_to_check = [p for p in pods if not _is_tombstone(p)] if ignore_tombstone_pods else pods
+        pods_to_check = filter_active_pods(pods) if ignore_tombstone_pods else pods
 
         # 2. Revision Consistency
         if w_type in [WorkloadType.DEPLOYMENT, WorkloadType.STATEFUL_SET, WorkloadType.DAEMON_SET]:
