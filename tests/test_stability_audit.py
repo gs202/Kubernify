@@ -650,3 +650,53 @@ class TestAuditWorkloadTombstoneAndAvailability:
 
         # No pods to health-check after filtering → pods_healthy=True (no errors)
         assert result.pods_healthy is True
+
+    def test_revision_consistency_ignores_tombstone_pods(
+        self, sample_deployment: V1Deployment, sample_workload_inspection: WorkloadInspectionResult
+    ) -> None:
+        """Verify evicted pod with old hash is excluded from revision check when flag is set.
+
+        Scenario: 1 healthy pod with the correct hash + 1 evicted pod (phase=Failed)
+        with an old hash.  With ``ignore_tombstone_pods=True`` the evicted pod should
+        be filtered out and ``revision_consistent`` should be ``True``.
+        """
+        live_pod = _make_pod(name="live-pod", ready=True, labels={"pod-template-hash": "abc12"})
+        evicted_pod = self._make_tombstone_pod(phase="Failed", name="evicted-pod")
+        # Give the evicted pod an OLD hash that differs from the expected one
+        evicted_pod.metadata.labels = {"pod-template-hash": "old-hash"}
+
+        sample_workload_inspection.pods = [live_pod, evicted_pod]
+        auditor = self._make_auditor_with_deployment(sample_deployment)
+
+        result = auditor.audit_workload(
+            workload_info=sample_workload_inspection,
+            ignore_tombstone_pods=True,
+        )
+
+        assert result.revision_consistent is True
+        assert not any("old-hash" in e for e in result.errors)
+
+    def test_revision_consistency_includes_tombstone_pods_when_flag_disabled(
+        self, sample_deployment: V1Deployment, sample_workload_inspection: WorkloadInspectionResult
+    ) -> None:
+        """Verify evicted pod with old hash IS included in revision check when flag is off.
+
+        Same setup as above but with ``ignore_tombstone_pods=False`` — the evicted pod's
+        stale hash should cause a revision consistency error.
+        """
+        live_pod = _make_pod(name="live-pod", ready=True, labels={"pod-template-hash": "abc12"})
+        evicted_pod = self._make_tombstone_pod(phase="Failed", name="evicted-pod")
+        evicted_pod.metadata.labels = {"pod-template-hash": "old-hash"}
+
+        sample_workload_inspection.pods = [live_pod, evicted_pod]
+        # Availability will also fail because the evicted pod is not healthy
+        sample_deployment.status.available_replicas = 1
+        auditor = self._make_auditor_with_deployment(sample_deployment)
+
+        result = auditor.audit_workload(
+            workload_info=sample_workload_inspection,
+            ignore_tombstone_pods=False,
+        )
+
+        assert result.revision_consistent is False
+        assert any("evicted-pod" in e and "old-hash" in e for e in result.errors)
