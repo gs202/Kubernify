@@ -112,7 +112,10 @@ def _containers_from_spec(
     return results
 
 
-def _extract_containers(workload: WorkloadInspectionResult) -> list[tuple[str, ContainerType, PodInfo | None]]:
+def _extract_containers(
+    workload: WorkloadInspectionResult,
+    ignore_tombstone_pods: bool = False,
+) -> list[tuple[str, ContainerType, PodInfo | None]]:
     """Extract container image/type/pod tuples from a workload.
 
     When running pods exist, their containers are used directly.  When no pods
@@ -121,11 +124,18 @@ def _extract_containers(workload: WorkloadInspectionResult) -> list[tuple[str, C
 
     Args:
         workload: A Kubernetes workload inspection result containing pods and pod_spec.
+        ignore_tombstone_pods: When ``True``, pods in phase ``Failed`` or ``Succeeded``
+            (e.g. Evicted, OOMKilled, Completed) are excluded from container extraction
+            to prevent stale image versions from polluting the component map.
 
     Returns:
         List of ``(image_string, container_type, pod_info)`` tuples.
     """
-    if pods := workload.pods:
+    pods = workload.pods
+    if ignore_tombstone_pods and pods:
+        pods = [p for p in pods if getattr(p.status, "phase", None) not in ("Failed", "Succeeded")]
+
+    if pods:
         results: list[tuple[str, ContainerType, PodInfo | None]] = []
         for pod in pods:
             pod_info = PodInfo(
@@ -284,6 +294,7 @@ def construct_component_map(
     repository_anchor: str,
     skip_containers: list[str] | None = None,
     reverse_aliases: dict[str, list[str]] | None = None,
+    ignore_tombstone_pods: bool = False,
 ) -> dict[str, list[ComponentMapEntry]]:
     """Construct a map of components to their found workloads and versions.
 
@@ -303,6 +314,9 @@ def construct_component_map(
         reverse_aliases: Optional mapping from image names to **lists** of manifest
             component names (e.g. ``{"shared-svc": ["foo", "bar"]}``).
             Built by ``build_reverse_alias_map()``.
+        ignore_tombstone_pods: When ``True``, evicted/failed pods (phase ``Failed``
+            or ``Succeeded``) are excluded from container extraction to prevent
+            stale image versions from polluting the component map.
 
     Returns:
         Dict mapping component names to lists of ``ComponentMapEntry`` instances.
@@ -312,7 +326,9 @@ def construct_component_map(
     alias_lookup = reverse_aliases or {}
 
     for workload in workloads:
-        for image, container_type, pod_info in _extract_containers(workload=workload):
+        for image, container_type, pod_info in _extract_containers(
+            workload=workload, ignore_tombstone_pods=ignore_tombstone_pods
+        ):
             try:
                 parsed = parse_image_reference(image=image, repository_anchor=repository_anchor)
             except ValueError:
@@ -1002,6 +1018,7 @@ def run_verification(args: argparse.Namespace) -> int:
                 repository_anchor=args.anchor,
                 skip_containers=skip_containers,
                 reverse_aliases=reverse_aliases,
+                ignore_tombstone_pods=args.ignore_tombstone_pods,
             )
         except Exception as e:
             logger.error(f"Discovery failed: {e}")
