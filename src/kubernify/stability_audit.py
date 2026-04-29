@@ -202,8 +202,10 @@ class StabilityAuditor:
                 Use ``0`` to forbid any restarts, or ``-1`` to skip the restart check entirely.
             min_uptime_sec: Minimum pod uptime in seconds.
             ignore_tombstone_pods: When ``True``, pods in phase ``Failed`` or ``Succeeded``
-                (OOMKilled, Evicted, Completed) are excluded from per-pod health checks.
-                The deployment availability check always runs regardless of this flag.
+                (OOMKilled, Evicted, Completed) are excluded from both the revision
+                consistency check and per-pod health checks.  This prevents evicted pods
+                carrying stale ReplicaSet hashes from causing false ``revision_consistent=False``
+                errors.  The deployment availability check always runs regardless of this flag.
 
         Returns:
             StabilityAuditResult with convergence, revision, health, scheduling, job, and availability status.
@@ -233,11 +235,17 @@ class StabilityAuditor:
         else:
             result.converged = True
 
+        # Filter tombstone pods when requested — used by both revision consistency and pod health checks
+        def _is_tombstone(pod: V1Pod) -> bool:
+            return getattr(pod.status, "phase", None) in ("Failed", "Succeeded")
+
+        pods_to_check = [p for p in pods if not _is_tombstone(p)] if ignore_tombstone_pods else pods
+
         # 2. Revision Consistency
         if w_type in [WorkloadType.DEPLOYMENT, WorkloadType.STATEFUL_SET, WorkloadType.DAEMON_SET]:
             if latest_revision and latest_revision.hash:
                 rev_errors = self.check_revision_consistency(
-                    pods=pods,
+                    pods=pods_to_check,
                     expected_revision_hash=latest_revision.hash,
                     workload_type=w_type,
                 )
@@ -250,11 +258,7 @@ class StabilityAuditor:
         else:
             result.revision_consistent = True
 
-        # 3. Pod Health — optionally filter tombstones (Failed/Succeeded) first
-        def _is_tombstone(pod: V1Pod) -> bool:
-            return getattr(pod.status, "phase", None) in ("Failed", "Succeeded")
-
-        pods_to_check = [p for p in pods if not _is_tombstone(p)] if ignore_tombstone_pods else pods
+        # 3. Pod Health
         pod_errors = []
         for pod in pods_to_check:
             pod_errors.extend(
