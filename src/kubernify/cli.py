@@ -43,6 +43,7 @@ from .models import (
     VersionVerificationResults,
     WorkloadInspectionResult,
     WorkloadReport,
+    filter_active_pods,
 )
 from .stability_audit import StabilityAuditor
 from .workload_discovery import WorkloadDiscovery
@@ -133,7 +134,7 @@ def _extract_containers(
     """
     pods = workload.pods
     if ignore_tombstone_pods and pods:
-        pods = [p for p in pods if getattr(p.status, "phase", None) not in ("Failed", "Succeeded")]
+        pods = filter_active_pods(pods)
 
     if pods:
         results: list[tuple[str, ContainerType, PodInfo | None]] = []
