@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from kubernetes.client import V1Container, V1ObjectMeta, V1Pod, V1PodSpec, V1PodStatus
 
 from kubernify.cli import (
+    _extract_containers,
     construct_component_map,
     validate_manifest,
     verify_required_workloads,
@@ -667,3 +668,140 @@ class TestVerifyRequiredWorkloads:
 
         assert len(errors) == 1
         assert "frontend" in errors[0]
+
+
+# ---------------------------------------------------------------------------
+# _extract_containers tombstone pod filtering tests
+# ---------------------------------------------------------------------------
+
+
+def _make_pod(
+    *,
+    name: str,
+    image: str,
+    phase: str = "Running",
+    pod_ip: str = "10.0.0.1",
+    node_name: str = "node-1",
+) -> V1Pod:
+    """Create a ``V1Pod`` with the given phase and image.
+
+    Args:
+        name: Pod name.
+        image: Container image reference string.
+        phase: Pod status phase (e.g. ``"Running"``, ``"Failed"``).
+        pod_ip: Pod IP address.
+        node_name: Node the pod is scheduled on.
+
+    Returns:
+        A ``V1Pod`` instance.
+    """
+    return V1Pod(
+        metadata=V1ObjectMeta(name=name),
+        spec=V1PodSpec(
+            node_name=node_name,
+            containers=[V1Container(name="app", image=image)],
+            init_containers=None,
+        ),
+        status=V1PodStatus(
+            phase=phase,
+            pod_ip=pod_ip,
+            start_time="2025-01-01T00:00:00Z",
+        ),
+    )
+
+
+class TestExtractContainersTombstoneFiltering:
+    """Tests for tombstone pod filtering in ``_extract_containers``."""
+
+    def test_extract_containers_filters_tombstone_pods(self) -> None:
+        """When ``ignore_tombstone_pods=True``, evicted/failed pods are excluded."""
+        healthy_pod = _make_pod(name="comp-pod-abc", image="registry/anchor/comp:v2", phase="Running")
+        evicted_pod = _make_pod(name="comp-pod-old", image="registry/anchor/comp:v1", phase="Failed")
+
+        workload = WorkloadInspectionResult(
+            name="comp",
+            type="Deployment",
+            namespace="default",
+            pods=[healthy_pod, evicted_pod],
+            pod_spec=healthy_pod.spec,
+        )
+
+        results = _extract_containers(workload, ignore_tombstone_pods=True)
+
+        assert len(results) == 1
+        image, container_type, pod_info = results[0]
+        assert image == "registry/anchor/comp:v2"
+        assert container_type == ContainerType.APP
+        assert pod_info is not None
+        assert pod_info.phase == "Running"
+
+    def test_extract_containers_includes_tombstone_pods_when_flag_disabled(self) -> None:
+        """When ``ignore_tombstone_pods=False``, all pods are included."""
+        healthy_pod = _make_pod(name="comp-pod-abc", image="registry/anchor/comp:v2", phase="Running")
+        evicted_pod = _make_pod(name="comp-pod-old", image="registry/anchor/comp:v1", phase="Failed")
+
+        workload = WorkloadInspectionResult(
+            name="comp",
+            type="Deployment",
+            namespace="default",
+            pods=[healthy_pod, evicted_pod],
+            pod_spec=healthy_pod.spec,
+        )
+
+        results = _extract_containers(workload, ignore_tombstone_pods=False)
+
+        assert len(results) == 2
+        images = {r[0] for r in results}
+        assert images == {"registry/anchor/comp:v2", "registry/anchor/comp:v1"}
+
+    def test_extract_containers_falls_back_to_pod_spec_when_all_pods_are_tombstones(self) -> None:
+        """When all pods are tombstones and ``ignore_tombstone_pods=True``, fall back to pod_spec."""
+        evicted_pod = _make_pod(name="comp-pod-old", image="registry/anchor/comp:v1", phase="Failed")
+
+        pod_spec = V1PodSpec(
+            containers=[V1Container(name="app", image="registry/anchor/comp:v2")],
+            init_containers=None,
+        )
+
+        workload = WorkloadInspectionResult(
+            name="comp",
+            type="Deployment",
+            namespace="default",
+            pods=[evicted_pod],
+            pod_spec=pod_spec,
+        )
+
+        results = _extract_containers(workload, ignore_tombstone_pods=True)
+
+        assert len(results) == 1
+        image, container_type, pod_info = results[0]
+        assert image == "registry/anchor/comp:v2"
+        assert container_type == ContainerType.APP
+        # pod_info is None when falling back to pod_spec
+        assert pod_info is None
+
+    def test_construct_component_map_filters_tombstone_pods(self) -> None:
+        """``construct_component_map`` with ``ignore_tombstone_pods=True`` excludes stale versions."""
+        healthy_pod = _make_pod(name="comp-pod-abc", image="registry/anchor/comp:v2", phase="Running")
+        evicted_pod = _make_pod(name="comp-pod-old", image="registry/anchor/comp:v1", phase="Failed")
+
+        workload = WorkloadInspectionResult(
+            name="comp",
+            type="Deployment",
+            namespace="default",
+            pods=[healthy_pod, evicted_pod],
+            pod_spec=healthy_pod.spec,
+        )
+
+        manifest = {"comp": "v2"}
+        component_map = construct_component_map(
+            workloads=[workload],
+            manifest=manifest,
+            repository_anchor="anchor",
+            ignore_tombstone_pods=True,
+        )
+
+        assert "comp" in component_map
+        entries = component_map["comp"]
+        assert len(entries) == 1
+        assert entries[0].actual_version == "v2"
