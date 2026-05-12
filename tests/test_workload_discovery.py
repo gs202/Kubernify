@@ -29,9 +29,7 @@ def _make_mock_controller() -> MagicMock:
     controller.get_daemon_sets = MagicMock()
     controller.get_jobs = MagicMock()
     controller.get_cron_jobs = MagicMock()
-    controller.list_pods_by_deployment = MagicMock()
-    controller.list_pods_by_stateful_set = MagicMock()
-    controller.list_pods_by_daemon_set = MagicMock()
+    controller.list_pods_for_workload = MagicMock()
     controller.list_pods_by_job = MagicMock()
     controller.get_deployment_latest_revision_info = MagicMock()
     controller.get_stateful_set_latest_revision_info = MagicMock()
@@ -64,7 +62,7 @@ class TestIncludeFlags:
         assert WorkloadType.CRON_JOB not in discovery._fetch_methods
 
     def test_include_statefulsets_registers_methods(self) -> None:
-        """Verify --include-statefulsets registers StatefulSet fetch, pod, and revision methods."""
+        """Verify --include-statefulsets registers StatefulSet fetch and revision methods."""
         controller = _make_mock_controller()
 
         discovery = WorkloadDiscovery(
@@ -75,11 +73,10 @@ class TestIncludeFlags:
         )
 
         assert WorkloadType.STATEFUL_SET in discovery._fetch_methods
-        assert WorkloadType.STATEFUL_SET in discovery._pod_methods
         assert WorkloadType.STATEFUL_SET in discovery._revision_methods
 
     def test_include_daemonsets_registers_methods(self) -> None:
-        """Verify --include-daemonsets registers DaemonSet fetch and pod methods."""
+        """Verify --include-daemonsets registers DaemonSet fetch method."""
         controller = _make_mock_controller()
 
         discovery = WorkloadDiscovery(
@@ -90,7 +87,6 @@ class TestIncludeFlags:
         )
 
         assert WorkloadType.DAEMON_SET in discovery._fetch_methods
-        assert WorkloadType.DAEMON_SET in discovery._pod_methods
         # DaemonSets do not have a revision method in _revision_methods
         assert WorkloadType.DAEMON_SET not in discovery._revision_methods
 
@@ -138,7 +134,6 @@ class TestIncludeFlags:
         )
 
         assert WorkloadType.STATEFUL_SET not in discovery._fetch_methods
-        assert WorkloadType.STATEFUL_SET not in discovery._pod_methods
         assert WorkloadType.STATEFUL_SET not in discovery._revision_methods
 
     def test_exclude_daemonsets_does_not_register(self) -> None:
@@ -153,7 +148,6 @@ class TestIncludeFlags:
         )
 
         assert WorkloadType.DAEMON_SET not in discovery._fetch_methods
-        assert WorkloadType.DAEMON_SET not in discovery._pod_methods
 
     def test_exclude_jobs_does_not_register(self) -> None:
         """Verify Job and CronJob methods are absent when include_jobs is False."""
@@ -265,3 +259,88 @@ class TestDiscoverClusterStateSkipPatterns:
         assert mock_inspect.call_count == 1
         call_kwargs = mock_inspect.call_args[1]
         assert call_kwargs["workload_name"] == "backend-deployment"
+
+
+# ---------------------------------------------------------------------------
+# Per-cycle cache lifecycle in discover_cluster_state (RS + pods symmetric)
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverClusterStateCacheLifecycle:
+    """``discover_cluster_state`` seeds and clears the per-cycle caches even on failure."""
+
+    def test_caches_are_seeded_and_cleared_even_on_inspect_failure(self) -> None:
+        controller = _make_mock_controller()
+        mock_workload = MagicMock()
+        mock_workload.metadata.name = "broken"
+        controller.get_deployments.return_value = {"broken": mock_workload}
+
+        discovery = WorkloadDiscovery(
+            k8s_controller=controller,
+            include_statefulsets=False,
+            include_daemonsets=False,
+            include_jobs=False,
+        )
+
+        with patch.object(discovery, "inspect_workload", side_effect=RuntimeError("boom")):
+            discovery.discover_cluster_state(namespace="xdr-st")
+
+        controller.seed_deployment_replica_set_cache.assert_called_once_with(namespace="xdr-st")
+        controller.clear_deployment_replica_set_cache.assert_called_once_with(namespace="xdr-st")
+        controller.seed_namespace_pod_cache.assert_called_once_with(namespace="xdr-st")
+        controller.clear_namespace_pod_cache.assert_called_once_with(namespace="xdr-st")
+
+
+# ---------------------------------------------------------------------------
+# DaemonSet revision uses the in-memory workload object
+# ---------------------------------------------------------------------------
+
+
+class TestGetDaemonsetRevisionReuse:
+    """``_get_daemonset_revision`` derives the hash from the in-memory DaemonSet."""
+
+    def test_uses_in_memory_workload_obj_and_skips_api(self) -> None:
+        controller = _make_mock_controller()
+        discovery = WorkloadDiscovery(
+            k8s_controller=controller,
+            include_statefulsets=False,
+            include_daemonsets=True,
+            include_jobs=False,
+        )
+        ds_obj = MagicMock()
+        ds_obj.spec.template.metadata.labels = {"controller-revision-hash": "hash-xyz"}
+
+        revision = discovery._get_daemonset_revision(workload_name="my-ds", workload_obj=ds_obj)
+
+        assert revision is not None
+        assert revision.hash == "hash-xyz"
+        controller.apps_v1.read_namespaced_daemon_set.assert_not_called()
+
+
+class TestInspectWorkloadCarriesWorkloadObj:
+    """``inspect_workload`` propagates ``workload_obj`` onto the result and into the pod call."""
+
+    def test_carries_workload_obj_on_result_and_into_pod_listing(self) -> None:
+        controller = _make_mock_controller()
+        deployment_obj = MagicMock()
+        deployment_obj.spec.template.spec = MagicMock()
+        controller.list_pods_for_workload.return_value = []
+        controller.get_deployment_latest_revision_info.return_value = MagicMock()
+
+        discovery = WorkloadDiscovery(
+            k8s_controller=controller,
+            include_statefulsets=False,
+            include_daemonsets=False,
+            include_jobs=False,
+        )
+
+        result = discovery.inspect_workload(
+            workload_name="demo",
+            workload_type=WorkloadType.DEPLOYMENT,
+            namespace="ns",
+            workload_obj=deployment_obj,
+        )
+
+        assert result.workload_obj is deployment_obj
+        controller.list_pods_for_workload.assert_called_once()
+        assert controller.list_pods_for_workload.call_args.kwargs.get("workload_obj") is deployment_obj
