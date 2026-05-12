@@ -700,3 +700,41 @@ class TestAuditWorkloadTombstoneAndAvailability:
 
         assert result.revision_consistent is False
         assert any("evicted-pod" in e and "old-hash" in e for e in result.errors)
+
+
+# ---------------------------------------------------------------------------
+# _get_workload_object reuses WorkloadInspectionResult.workload_obj
+# ---------------------------------------------------------------------------
+
+
+class TestGetWorkloadObjectReuse:
+    """``audit_workload`` reuses the in-memory workload from discovery, falling back only when absent."""
+
+    def test_audit_workload_uses_carried_forward_workload_obj(
+        self,
+        sample_deployment: V1Deployment,
+        sample_workload_inspection: WorkloadInspectionResult,
+    ) -> None:
+        auditor = _make_auditor()
+        sample_workload_inspection.workload_obj = sample_deployment
+
+        auditor.audit_workload(workload_info=sample_workload_inspection)
+
+        auditor.k8s_controller.apps_v1.read_namespaced_deployment.assert_not_called()
+
+    def test_audit_workload_falls_back_when_workload_obj_absent(
+        self,
+        sample_deployment: V1Deployment,
+        sample_workload_inspection: WorkloadInspectionResult,
+    ) -> None:
+        """The error-path ``WorkloadInspectionResult`` (no carried object) still works via API read."""
+        auditor = _make_auditor()
+        sample_workload_inspection.workload_obj = None
+        auditor.k8s_controller.apps_v1.read_namespaced_deployment.return_value = sample_deployment
+
+        auditor.audit_workload(workload_info=sample_workload_inspection)
+
+        auditor.k8s_controller.apps_v1.read_namespaced_deployment.assert_called_once_with(
+            name=sample_workload_inspection.name,
+            namespace=sample_workload_inspection.namespace,
+        )
