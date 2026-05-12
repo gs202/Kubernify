@@ -179,7 +179,7 @@ class WorkloadDiscovery:
                 workload_name = workload.metadata.name
                 # Skip workloads whose name matches any skip pattern
                 if patterns and any(p in workload_name for p in patterns):
-                    self.logger.info(f"Skipping inspection of workload {workload_name} (matched skip pattern)")
+                    self.logger.debug(f"Skipping inspection of workload {workload_name} (matched skip pattern)")
                     skipped_workloads.append(workload_name)
                     continue
                 tasks.append(

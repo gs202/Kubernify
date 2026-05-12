@@ -289,6 +289,56 @@ def _resolve_component(
     return None
 
 
+def _image_path_segments(image: str) -> list[str]:
+    """Split a container image reference into its path segments.
+
+    Mirrors the segment-splitting logic of :func:`parse_image_reference` for
+    the limited purpose of detecting whether a repository anchor appears
+    anywhere in the image path. Strips any ``@``-suffix and the trailing tag,
+    then drops the registry host segment if one is present. The function does
+    not normalize Docker Hub aliases — anchor detection on Docker Hub images
+    is not a use case we currently care about for logging purposes.
+
+    Args:
+        image: Raw container image reference (e.g.
+            ``"registry.example.com/org/my-app/backend:v1.2.3"``).
+
+    Returns:
+        List of path segments excluding the registry host and tag. Returns an
+        empty list if the input is empty/whitespace-only.
+    """
+    if not image or not image.strip():
+        return []
+
+    working = image.strip()
+    if "@" in working:
+        working = working[: working.index("@")]
+
+    segments = working.split("/")
+    last_segment = segments[-1]
+    if ":" in last_segment:
+        name_part, _ = last_segment.rsplit(":", 1)
+        segments[-1] = name_part
+
+    # Drop registry host (first segment containing '.' or ':')
+    if len(segments) > 1 and ("." in segments[0] or ":" in segments[0]):
+        segments = segments[1:]
+
+    return segments
+
+
+def _format_manifest_keys(manifest: dict[str, str]) -> str:
+    """Render manifest keys as a deterministic, comma-separated string.
+
+    Args:
+        manifest: Version manifest mapping component names to expected versions.
+
+    Returns:
+        Sorted, comma-separated list of manifest keys (e.g. ``"backend, frontend"``).
+    """
+    return ", ".join(sorted(manifest.keys()))
+
+
 def construct_component_map(
     workloads: list[WorkloadInspectionResult],
     manifest: dict[str, str],
@@ -325,6 +375,9 @@ def construct_component_map(
     component_map: dict[str, list[ComponentMapEntry]] = defaultdict(list)
     skip_patterns = skip_containers or []
     alias_lookup = reverse_aliases or {}
+    # Deduplicate "Ignoring" log lines by (workload_name, image) so a workload
+    # with N pods sharing the same dropped image emits exactly one log line.
+    ignored_logged: set[tuple[str, str]] = set()
 
     for workload in workloads:
         for image, container_type, pod_info in _extract_containers(
@@ -344,6 +397,22 @@ def construct_component_map(
             )
 
             if resolved_component is None:
+                dedupe_key = (workload.name, image)
+                if dedupe_key not in ignored_logged:
+                    ignored_logged.add(dedupe_key)
+                    anchor_present = repository_anchor in _image_path_segments(image)
+                    manifest_keys = _format_manifest_keys(manifest)
+                    if anchor_present:
+                        logger.debug(
+                            f"Ignoring workload '{workload.name}' parsed component "
+                            f"'{parsed.component}' is not in manifest [{manifest_keys}]"
+                        )
+                    else:
+                        logger.debug(
+                            f"Ignoring workload '{workload.name}' anchor "
+                            f"'{repository_anchor}' not found in image path, "
+                            f"fallback component '{parsed.component}' is not in manifest [{manifest_keys}]"
+                        )
                 continue
 
             if _should_skip(
@@ -362,6 +431,36 @@ def construct_component_map(
             )
 
     return dict(component_map)
+
+
+def _log_discovery_summary(
+    discovered_items: list[WorkloadInspectionResult],
+    skipped_workload_names: list[str],
+    component_map: dict[str, list[ComponentMapEntry]],
+) -> None:
+    """Emit an aggregate discovery summary log line.
+
+    Counts inspected/skipped/included/ignored workloads after
+    :func:`construct_component_map` has run. ``inspected`` counts workloads
+    that went through inspection, ``skipped`` counts workloads excluded by
+    ``--skip-containers`` patterns at discovery time, ``included`` counts
+    unique workload names that contributed at least one entry to the
+    component map, and ``ignored`` is ``inspected - included``.
+
+    Args:
+        discovered_items: Workloads returned by ``discover_cluster_state``.
+        skipped_workload_names: Workload names skipped by ``--skip-containers``.
+        component_map: Component map produced by ``construct_component_map``.
+    """
+    inspected = len(discovered_items)
+    skipped = len(skipped_workload_names)
+    included_workloads: set[str] = {entry.workload_name for entries in component_map.values() for entry in entries}
+    included = len(included_workloads)
+    ignored = inspected - included
+    logger.info(
+        f"Discovery summary: {included} included, {skipped} skipped (--skip-containers), "
+        f"{ignored} ignored (not in manifest), {inspected} inspected"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1020,6 +1119,11 @@ def run_verification(args: argparse.Namespace) -> int:
                 skip_containers=skip_containers,
                 reverse_aliases=reverse_aliases,
                 ignore_tombstone_pods=args.ignore_tombstone_pods,
+            )
+            _log_discovery_summary(
+                discovered_items=discovered_items,
+                skipped_workload_names=skipped_workload_names,
+                component_map=component_map,
             )
         except Exception as e:
             logger.error(f"Discovery failed: {e}")

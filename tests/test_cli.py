@@ -12,10 +12,12 @@ import pytest
 
 from kubernify.cli import (
     _get_current_namespace,
+    _log_discovery_summary,
     _parse_comma_list,
     _resolve_component,
     _setup_logging,
     build_reverse_alias_map,
+    construct_component_map,
     generate_report,
     load_component_aliases,
     load_manifest,
@@ -23,8 +25,10 @@ from kubernify.cli import (
     run_verification,
 )
 from kubernify.models import (
+    ComponentMapEntry,
     ComponentReport,
     ComponentVerificationResult,
+    ContainerType,
     RevisionInfo,
     StabilityAuditResult,
     VerificationResult,
@@ -1513,3 +1517,265 @@ class TestOutputFile:
         assert exit_code == 0
         # No files should be created in tmp_path
         assert list(tmp_path.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# Discovery visibility logging tests
+# ---------------------------------------------------------------------------
+
+
+def _make_workload_with_images(
+    name: str,
+    images: list[str],
+    pod_count: int = 1,
+) -> WorkloadInspectionResult:
+    """Build a ``WorkloadInspectionResult`` with ``pod_count`` pods, each running ``images``.
+
+    Args:
+        name: Workload name.
+        images: Container images that every pod in this workload exposes.
+        pod_count: Number of identical pods to attach.
+
+    Returns:
+        A ``WorkloadInspectionResult`` instance suitable for feeding into
+        ``construct_component_map``.
+    """
+    pods: list[MagicMock] = []
+    for index in range(pod_count):
+        pod = MagicMock()
+        pod.metadata.name = f"{name}-pod-{index}"
+        pod.metadata.namespace = "default"
+        pod.metadata.labels = {"app": name, "pod-template-hash": "abc12"}
+        pod.metadata.deletion_timestamp = None
+        pod.spec.node_name = f"node-{index}"
+        pod.spec.containers = [MagicMock(image=img) for img in images]
+        pod.spec.init_containers = None
+        pod.status.phase = "Running"
+        pod.status.pod_ip = f"10.0.0.{index + 1}"
+        pod.status.start_time = "2025-01-01T00:00:00Z"
+        pods.append(pod)
+
+    return WorkloadInspectionResult(
+        name=name,
+        type="Deployment",
+        namespace="default",
+        latest_revision=RevisionInfo(hash="abc12"),
+        pods=pods,
+        pod_spec=pods[0].spec,
+    )
+
+
+class TestConstructComponentMapIgnoredLogging:
+    """Tests for the per-workload 'Ignoring' log emitted by ``construct_component_map``."""
+
+    def test_logs_ignoring_when_parsed_component_not_in_manifest(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A workload whose parsed component is not in the manifest is logged."""
+        manifest = {"backend": "v1.0.0", "frontend": "v1.0.0"}
+        workload = _make_workload_with_images(
+            name="xdr-st-2807881543185-xsoar-workers-router",
+            images=["registry.example.com/org/cortex-xdr/xsoar/workers-router:1.2.3"],
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            component_map = construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="cortex-xdr",
+            )
+
+        assert component_map == {}
+        ignoring_records = [r for r in caplog.records if "Ignoring workload" in r.message]
+        assert len(ignoring_records) == 1
+        message = ignoring_records[0].message
+        assert "'xdr-st-2807881543185-xsoar-workers-router'" in message
+        assert "parsed component 'xsoar' is not in manifest" in message
+        assert "[backend, frontend]" in message
+        # The "anchor not found" variant must NOT appear here — anchor IS present.
+        assert "anchor 'cortex-xdr' not found" not in message
+
+    def test_logs_anchor_not_found_variant(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A workload whose image lacks the anchor in its path emits the 'anchor not found' variant."""
+        manifest = {"backend": "v1.0.0", "frontend": "v1.0.0"}
+        workload = _make_workload_with_images(
+            name="reloader",
+            images=["stakater/reloader:v1.0.94"],
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            component_map = construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="cortex-xdr",
+            )
+
+        assert component_map == {}
+        ignoring_records = [r for r in caplog.records if "Ignoring workload" in r.message]
+        assert len(ignoring_records) == 1
+        message = ignoring_records[0].message
+        assert "'reloader'" in message
+        assert "anchor 'cortex-xdr' not found in image path" in message
+        assert "fallback component 'reloader' is not in manifest" in message
+        assert "[backend, frontend]" in message
+
+    def test_does_not_log_ignoring_when_component_resolves(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A workload whose image DOES resolve to a manifest component is not logged as ignored."""
+        manifest = {"backend": "v1.2.3"}
+        workload = _make_workload_with_images(
+            name="backend-deployment",
+            images=["registry.example.com/org/my-app/backend:v1.2.3"],
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            component_map = construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="my-app",
+            )
+
+        assert "backend" in component_map
+        ignoring_records = [r for r in caplog.records if "Ignoring workload" in r.message]
+        assert ignoring_records == []
+
+    def test_dedupes_log_across_pods_with_same_image(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A workload with N pods sharing one ignored image emits exactly one log line."""
+        manifest = {"backend": "v1.0.0"}
+        workload = _make_workload_with_images(
+            name="ignored-workload",
+            images=["registry.example.com/org/my-app/some-other-component:v1.0.0"],
+            pod_count=5,
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="my-app",
+            )
+
+        ignoring_records = [r for r in caplog.records if "Ignoring workload" in r.message]
+        assert len(ignoring_records) == 1
+
+    def test_distinct_unmatched_images_log_per_image(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A workload with multiple distinct unmatched images emits one log per distinct image."""
+        manifest = {"backend": "v1.0.0"}
+        workload = _make_workload_with_images(
+            name="ignored-workload",
+            images=[
+                "registry.example.com/org/my-app/component-a:v1.0.0",
+                "registry.example.com/org/my-app/component-b:v1.0.0",
+            ],
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="my-app",
+            )
+
+        ignoring_records = [r for r in caplog.records if "Ignoring workload" in r.message]
+        assert len(ignoring_records) == 2
+        joined = " | ".join(r.message for r in ignoring_records)
+        assert "parsed component 'component-a'" in joined
+        assert "parsed component 'component-b'" in joined
+
+
+class TestLogDiscoverySummary:
+    """Tests for the aggregate ``Discovery summary`` log line."""
+
+    def test_summary_counts_included_skipped_ignored_inspected(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Summary line reports correct counts for included/skipped/ignored/inspected."""
+        included_workload = _make_workload_with_images(
+            name="backend-deployment",
+            images=["registry.example.com/org/my-app/backend:v1.2.3"],
+        )
+        ignored_workload = _make_workload_with_images(
+            name="other-workload",
+            images=["registry.example.com/org/my-app/unmatched:v1.0.0"],
+        )
+        component_map: dict[str, list[ComponentMapEntry]] = {
+            "backend": [
+                ComponentMapEntry(
+                    workload_name="backend-deployment",
+                    workload_type="Deployment",
+                    container_name="backend",
+                    container_type=ContainerType.APP,
+                    actual_version="v1.2.3",
+                    pods=[],
+                ),
+            ],
+        }
+
+        with caplog.at_level(logging.INFO, logger="kubernify.cli"):
+            _log_discovery_summary(
+                discovered_items=[included_workload, ignored_workload],
+                skipped_workload_names=["skipped-a", "skipped-b", "skipped-c"],
+                component_map=component_map,
+            )
+
+        summary_records = [r for r in caplog.records if "Discovery summary" in r.message]
+        assert len(summary_records) == 1
+        message = summary_records[0].message
+        assert "1 included" in message
+        assert "3 skipped (--skip-containers)" in message
+        assert "1 ignored (not in manifest)" in message
+        assert "2 inspected" in message
+
+    def test_summary_emitted_by_run_verification(self, caplog: pytest.LogCaptureFixture) -> None:
+        """``run_verification`` emits the discovery summary log line."""
+        args = argparse.Namespace(
+            manifest='{"backend": "v1.2.3"}',
+            context="test-context",
+            gke_project=None,
+            namespace="default",
+            anchor="my-app",
+            timeout=300,
+            restart_threshold=3,
+            min_uptime=0,
+            allow_zero_replicas=False,
+            allow_zero_replicas_for=None,
+            dry_run=True,
+            include_statefulsets=False,
+            include_daemonsets=False,
+            include_jobs=False,
+            required_workloads=None,
+            skip_containers=None,
+            component_aliases=None,
+            ignore_tombstone_pods=False,
+            output_file=None,
+        )
+
+        workload = _make_workload_with_images(
+            name="backend-deployment",
+            images=["registry.example.com/org/my-app/backend:v1.2.3"],
+        )
+
+        mock_controller = MagicMock()
+        mock_discovery = MagicMock()
+        mock_auditor = MagicMock()
+        mock_discovery.discover_cluster_state.return_value = ([workload], [])
+        mock_auditor.audit_workload.return_value = StabilityAuditResult(
+            converged=True,
+            revision_consistent=True,
+            pods_healthy=True,
+            scheduling_complete=True,
+            job_complete=True,
+            errors=[],
+        )
+
+        with (
+            patch("kubernify.cli.KubernetesController", return_value=mock_controller),
+            patch("kubernify.cli.WorkloadDiscovery", return_value=mock_discovery),
+            patch("kubernify.cli.StabilityAuditor", return_value=mock_auditor),
+            caplog.at_level(logging.INFO, logger="kubernify.cli"),
+        ):
+            exit_code = run_verification(args=args)
+
+        assert exit_code == 0
+        summary_records = [r for r in caplog.records if "Discovery summary" in r.message]
+        assert len(summary_records) >= 1
+        message = summary_records[0].message
+        assert "1 included" in message
+        assert "0 skipped (--skip-containers)" in message
+        assert "0 ignored (not in manifest)" in message
+        assert "1 inspected" in message
