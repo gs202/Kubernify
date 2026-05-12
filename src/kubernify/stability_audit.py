@@ -171,8 +171,21 @@ class StabilityAuditor:
             ]
         return []
 
-    def _get_workload_object(self, name: str, namespace: str, workload_type: str) -> KubernetesWorkload | None:
-        """Helper to fetch the actual Kubernetes object."""
+    def _get_workload_object(
+        self,
+        name: str,
+        namespace: str,
+        workload_type: str,
+        workload_obj: KubernetesWorkload | None = None,
+    ) -> KubernetesWorkload | None:
+        """Return the workload object, preferring the in-memory one from discovery.
+
+        Falls back to a ``read_namespaced_*`` API call only for results
+        constructed without ``workload_obj`` (e.g. error-path placeholders).
+        """
+        if workload_obj is not None:
+            return workload_obj
+
         try:
             if workload_type == WorkloadType.DEPLOYMENT:
                 return self.k8s_controller.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
@@ -223,7 +236,12 @@ class StabilityAuditor:
             result.errors.append("Invalid workload info provided")
             return result
 
-        workload_obj = self._get_workload_object(name=name, namespace=namespace, workload_type=w_type)
+        workload_obj = self._get_workload_object(
+            name=name,
+            namespace=namespace,
+            workload_type=w_type,
+            workload_obj=workload_info.workload_obj,
+        )
         if not workload_obj:
             result.errors.append(f"Could not fetch workload object {name}")
             return result

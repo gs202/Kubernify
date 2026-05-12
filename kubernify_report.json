@@ -1,0 +1,28 @@
+{
+  "timestamp": "2026-05-12T07:57:25.706867+00:00",
+  "context": "xdr-sa-2807881543185",
+  "namespace": "xdr-st",
+  "status": "PASS",
+  "summary": {
+    "total_components": 2,
+    "passing_components": 2,
+    "failed_components": 0,
+    "missing_components": 0,
+    "missing_workloads": 0,
+    "version_mismatched_components": 0,
+    "unstable_workloads": 0,
+    "skipped_containers": 4
+  },
+  "details": {
+    "backend": {
+      "status": "PASS",
+      "errors": [],
+      "workloads": []
+    },
+    "frontend": {
+      "status": "PASS",
+      "errors": [],
+      "workloads": []
+    }
+  }
+}

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-05-12
+
+### Added
+
+- `--verbose` / `-v` CLI flag to enable DEBUG-level console logging (default remains INFO). Surfaces per-workload skip/ignore decisions and other diagnostic detail.
+- Aggregate INFO `Discovery summary: <N> included, <N> skipped (--skip-containers workload-name match), <N> container-skipped (--skip-containers container-name match), <N> unparseable images, <N> not in manifest, <N> inspected` log line emitted after each cluster discovery cycle. The five buckets are mutually exclusive and sum to `inspected`.
+- Per-workload DEBUG log lines explaining why each workload was dropped from the verification scope: container-name skip, unparseable image, anchor-not-found in image path, or component-not-in-manifest. Deduplicated per `(workload, image)`.
+
+### Changed
+
+- **Workload discovery performance**: ReplicaSets and Pods are now fetched once per discovery cycle using paginated `limit` / `_continue` requests and served from in-memory maps. For a large namespace (e.g. 92 Deployments / 848 ReplicaSets), discovery drops from ~390+ scattered Kubernetes API calls per cycle to roughly 3 paginated namespace-wide reads.
+- The workload object loaded during discovery is now carried forward into pod listing and the stability audit, removing redundant `read_namespaced_{deployment,stateful_set,daemon_set}` round trips per workload.
+- Per-workload `Skipping inspection of workload <name> (matched skip pattern)` log demoted from INFO to DEBUG. Use the new `Discovery summary` line for an at-a-glance INFO view.
+- Console log format: logger name field is now the literal `kubernify` instead of the full module path (e.g. `kubernify.cli`).
+- Internal: `construct_component_map()` now returns a `ComponentMapResult` dataclass exposing the component map plus three exclusion-reason workload sets. No public CLI or report-schema impact.
+- Internal: `list_pods_by_deployment` / `list_pods_by_stateful_set` / `list_pods_by_daemon_set` collapsed into a single `list_pods_for_workload`.
+
+### Fixed
+
+- Eliminates HTTP 429 *Too Many Requests* and `urllib3` `IncompleteRead` errors that could surface against large namespaces during cluster discovery.
+
 ## [1.1.3] - 2026-04-29
 
 ### Fixed
