@@ -52,11 +52,16 @@ from .workload_discovery import WorkloadDiscovery
 logger = logging.getLogger(__name__)
 
 
-def _setup_logging() -> None:
-    """Configure logging for CLI usage. Only called from main()."""
+def _setup_logging(verbose: bool = False) -> None:
+    """Configure logging for CLI usage. Only called from main().
+
+    Args:
+        verbose: When ``True``, set console log level to DEBUG; otherwise INFO.
+    """
+    log_level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s : %(name)-13s : %(levelname)s :: %(message)s",
+        level=log_level,
+        format="%(asctime)s : kubernify : %(levelname)s :: %(message)s",
     )
 
 
@@ -1022,6 +1027,12 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Path to save the JSON verification report to a file (report is always printed to stdout)",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output (DEBUG level logging to console)",
+    )
     return parser.parse_args(args)
 
 
@@ -1284,9 +1295,9 @@ def run_verification(args: argparse.Namespace) -> int:
 
 def main() -> None:
     """CLI entry point for kubernify."""
-    _setup_logging()
+    parsed_args = parse_args()
+    _setup_logging(verbose=parsed_args.verbose)
     try:
-        parsed_args = parse_args()
         sys.exit(run_verification(args=parsed_args))
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
