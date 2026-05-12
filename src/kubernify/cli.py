@@ -30,6 +30,7 @@ from .models import (
     DEFAULT_TIMEOUT_SECONDS,
     RETRY_INTERVAL_SECONDS,
     ComponentMapEntry,
+    ComponentMapResult,
     ComponentReport,
     ComponentVerificationResult,
     ContainerType,
@@ -346,7 +347,7 @@ def construct_component_map(
     skip_containers: list[str] | None = None,
     reverse_aliases: dict[str, list[str]] | None = None,
     ignore_tombstone_pods: bool = False,
-) -> dict[str, list[ComponentMapEntry]]:
+) -> ComponentMapResult:
     """Construct a map of components to their found workloads and versions.
 
     Always extracts containers from both running pods and zero-replica pod spec
@@ -355,6 +356,15 @@ def construct_component_map(
     When multiple manifest keys alias to the same container image name, the
     workload name is used to disambiguate: the manifest key that appears as a
     substring of the workload name wins.
+
+    Per-workload bucket precedence (each workload ends up in exactly one
+    bucket of the returned :class:`ComponentMapResult`):
+
+    ``included > container_skipped > unparseable > not_in_manifest``
+
+    A workload is ``included`` if it contributed at least one entry to
+    ``component_map``. Otherwise the strictest matching exclusion bucket
+    wins.
 
     Args:
         workloads: Discovered Kubernetes workload objects.
@@ -370,14 +380,25 @@ def construct_component_map(
             stale image versions from polluting the component map.
 
     Returns:
-        Dict mapping component names to lists of ``ComponentMapEntry`` instances.
+        A :class:`ComponentMapResult` containing the component map and three
+        mutually exclusive sets of workload names that were excluded from
+        the map (container-skipped, unparseable image, not in manifest).
     """
     component_map: dict[str, list[ComponentMapEntry]] = defaultdict(list)
     skip_patterns = skip_containers or []
     alias_lookup = reverse_aliases or {}
-    # Deduplicate "Ignoring" log lines by (workload_name, image) so a workload
-    # with N pods sharing the same dropped image emits exactly one log line.
-    ignored_logged: set[tuple[str, str]] = set()
+    manifest_keys = _format_manifest_keys(manifest)
+    not_in_manifest_logged: set[tuple[str, str]] = set()
+    container_skipped_logged: set[tuple[str, str]] = set()
+    unparseable_logged: set[tuple[str, str]] = set()
+
+    has_included: dict[str, bool] = defaultdict(bool)
+    has_container_skipped: dict[str, bool] = defaultdict(bool)
+    has_unparseable: dict[str, bool] = defaultdict(bool)
+    has_not_in_manifest: dict[str, bool] = defaultdict(bool)
+
+    pending_container_skipped_logs: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
+    pending_unparseable_logs: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
 
     for workload in workloads:
         for image, container_type, pod_info in _extract_containers(
@@ -385,7 +406,9 @@ def construct_component_map(
         ):
             try:
                 parsed = parse_image_reference(image=image, repository_anchor=repository_anchor)
-            except ValueError:
+            except ValueError as exc:
+                has_unparseable[workload.name] = True
+                pending_unparseable_logs[workload.name].append((workload.name, image, str(exc)))
                 continue
 
             # Apply alias resolution: remap image name → manifest component name
@@ -397,11 +420,11 @@ def construct_component_map(
             )
 
             if resolved_component is None:
+                has_not_in_manifest[workload.name] = True
                 dedupe_key = (workload.name, image)
-                if dedupe_key not in ignored_logged:
-                    ignored_logged.add(dedupe_key)
+                if dedupe_key not in not_in_manifest_logged:
+                    not_in_manifest_logged.add(dedupe_key)
                     anchor_present = repository_anchor in _image_path_segments(image)
-                    manifest_keys = _format_manifest_keys(manifest)
                     if anchor_present:
                         logger.debug(
                             f"Ignoring workload '{workload.name}' parsed component "
@@ -415,11 +438,17 @@ def construct_component_map(
                         )
                 continue
 
-            if _should_skip(
+            matched_pattern = _should_skip(
                 skip_patterns=skip_patterns, container_name=resolved_component, workload_name=workload.name
-            ):
+            )
+            if matched_pattern:
+                has_container_skipped[workload.name] = True
+                pending_container_skipped_logs[workload.name].append(
+                    (workload.name, image, matched_pattern, resolved_component)
+                )
                 continue
 
+            has_included[workload.name] = True
             _build_or_update_entry(
                 component_map=component_map,
                 component=resolved_component,
@@ -430,37 +459,89 @@ def construct_component_map(
                 pod_info=pod_info,
             )
 
-    return dict(component_map)
+    container_skipped_workloads: set[str] = set()
+    unparseable_image_workloads: set[str] = set()
+    not_in_manifest_workloads: set[str] = set()
+    workload_names = set(has_included) | set(has_container_skipped) | set(has_unparseable) | set(has_not_in_manifest)
+    for name in workload_names:
+        if has_included[name]:
+            continue
+        if has_container_skipped[name]:
+            container_skipped_workloads.add(name)
+        elif has_unparseable[name]:
+            unparseable_image_workloads.add(name)
+        elif has_not_in_manifest[name]:
+            not_in_manifest_workloads.add(name)
+
+    for name in container_skipped_workloads:
+        for workload_name, image, pattern, container_name in pending_container_skipped_logs[name]:
+            dedupe_key = (workload_name, image)
+            if dedupe_key in container_skipped_logged:
+                continue
+            container_skipped_logged.add(dedupe_key)
+            logger.debug(
+                f"Container-skipping workload '{workload_name}' container image "
+                f"'{image}': matched skip pattern '{pattern}' on container '{container_name}'"
+            )
+    for name in unparseable_image_workloads:
+        for workload_name, image, error_message in pending_unparseable_logs[name]:
+            dedupe_key = (workload_name, image)
+            if dedupe_key in unparseable_logged:
+                continue
+            unparseable_logged.add(dedupe_key)
+            logger.debug(f"Could not parse container image '{image}' for workload '{workload_name}': {error_message}")
+
+    return ComponentMapResult(
+        component_map=dict(component_map),
+        container_skipped_workloads=container_skipped_workloads,
+        unparseable_image_workloads=unparseable_image_workloads,
+        not_in_manifest_workloads=not_in_manifest_workloads,
+    )
 
 
 def _log_discovery_summary(
-    discovered_items: list[WorkloadInspectionResult],
+    discovered_workloads: list[WorkloadInspectionResult],
     skipped_workload_names: list[str],
     component_map: dict[str, list[ComponentMapEntry]],
+    container_skipped_workloads: set[str],
+    unparseable_image_workloads: set[str],
+    not_in_manifest_workloads: set[str],
 ) -> None:
-    """Emit an aggregate discovery summary log line.
-
-    Counts inspected/skipped/included/ignored workloads after
-    :func:`construct_component_map` has run. ``inspected`` counts workloads
-    that went through inspection, ``skipped`` counts workloads excluded by
-    ``--skip-containers`` patterns at discovery time, ``included`` counts
-    unique workload names that contributed at least one entry to the
-    component map, and ``ignored`` is ``inspected - included``.
+    """Log discovery summary with five mutually exclusive workload buckets.
 
     Args:
-        discovered_items: Workloads returned by ``discover_cluster_state``.
+        discovered_workloads: Workloads returned by ``discover_cluster_state``.
         skipped_workload_names: Workload names skipped by ``--skip-containers``.
         component_map: Component map produced by ``construct_component_map``.
+        container_skipped_workloads: Workloads filtered by ``--skip-containers``.
+        unparseable_image_workloads: Workloads with unparseable images.
+        not_in_manifest_workloads: Workloads with no manifest match.
     """
-    inspected = len(discovered_items)
+    inspected = len(discovered_workloads)
     skipped = len(skipped_workload_names)
     included_workloads: set[str] = {entry.workload_name for entries in component_map.values() for entry in entries}
     included = len(included_workloads)
-    ignored = inspected - included
+    container_skipped = len(container_skipped_workloads)
+    unparseable = len(unparseable_image_workloads)
+    not_in_manifest = len(not_in_manifest_workloads)
+
     logger.info(
-        f"Discovery summary: {included} included, {skipped} skipped (--skip-containers), "
-        f"{ignored} ignored (not in manifest), {inspected} inspected"
+        f"Discovery summary: {included} included, "
+        f"{skipped} skipped (--skip-containers workload-name match), "
+        f"{container_skipped} container-skipped (--skip-containers container-name match), "
+        f"{unparseable} unparseable images, "
+        f"{not_in_manifest} not in manifest, "
+        f"{inspected} inspected"
     )
+
+    bucket_sum = included + container_skipped + unparseable + not_in_manifest
+    if bucket_sum != inspected:
+        logger.warning(
+            f"Discovery summary bucket invariant violated: included ({included}) + "
+            f"container_skipped ({container_skipped}) + unparseable ({unparseable}) + "
+            f"not_in_manifest ({not_in_manifest}) = {bucket_sum}, expected {inspected} (inspected). "
+            f"This indicates a bucketing bug."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1112,7 +1193,7 @@ def run_verification(args: argparse.Namespace) -> int:
                 skip_patterns=skip_containers,
             )
             discovered_map = {f"{item.type}/{item.name}": item for item in discovered_items}
-            component_map = construct_component_map(
+            component_map_result = construct_component_map(
                 workloads=discovered_items,
                 manifest=manifest,
                 repository_anchor=args.anchor,
@@ -1120,10 +1201,14 @@ def run_verification(args: argparse.Namespace) -> int:
                 reverse_aliases=reverse_aliases,
                 ignore_tombstone_pods=args.ignore_tombstone_pods,
             )
+            component_map = component_map_result.component_map
             _log_discovery_summary(
-                discovered_items=discovered_items,
+                discovered_workloads=discovered_items,
                 skipped_workload_names=skipped_workload_names,
                 component_map=component_map,
+                container_skipped_workloads=component_map_result.container_skipped_workloads,
+                unparseable_image_workloads=component_map_result.unparseable_image_workloads,
+                not_in_manifest_workloads=component_map_result.not_in_manifest_workloads,
             )
         except Exception as e:
             logger.error(f"Discovery failed: {e}")

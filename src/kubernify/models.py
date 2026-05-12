@@ -159,6 +159,23 @@ class ComponentMapEntry:
 
 
 @dataclass
+class ComponentMapResult:
+    """Result from :func:`construct_component_map` with component map and exclusion buckets.
+
+    Attributes:
+        component_map: Mapping of manifest component name to discovered entries.
+        container_skipped_workloads: Workloads filtered by ``--skip-containers``.
+        unparseable_image_workloads: Workloads with unparseable container images.
+        not_in_manifest_workloads: Workloads with no manifest match.
+    """
+
+    component_map: dict[str, list[ComponentMapEntry]]
+    container_skipped_workloads: set[str] = field(default_factory=set)
+    unparseable_image_workloads: set[str] = field(default_factory=set)
+    not_in_manifest_workloads: set[str] = field(default_factory=set)
+
+
+@dataclass
 class VerificationResult:
     """Result of a component verification check."""
 
