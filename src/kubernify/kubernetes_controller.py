@@ -26,6 +26,7 @@ from kubernetes.client import (
     V1Job,
     V1LabelSelector,
     V1Pod,
+    V1ReplicaSet,
     V1StatefulSet,
 )
 
@@ -74,6 +75,13 @@ class KubernetesController:
 
         # Lock for thread-safe initialization of the client
         self._client_lock = threading.Lock()
+
+        # Per-discovery-cycle caches keyed by namespace; both are accessed
+        # from a thread pool so each has its own lock.
+        self._deployment_rs_cache: dict[str, dict[str, list[V1ReplicaSet]]] = {}
+        self._rs_cache_lock = threading.Lock()
+        self._namespace_pod_cache: dict[str, list[V1Pod]] = {}
+        self._namespace_pod_cache_lock = threading.Lock()
 
         # Initialize the client immediately
         self._initialize_client()
@@ -280,46 +288,35 @@ class KubernetesController:
         except Exception as e:
             raise KubernetesControllerException(f"Failed to get {resource_label}: {e}") from e
 
-    def _list_pods_by_workload(
+    def list_pods_for_workload(
         self,
-        read_fn: Callable[..., Any],
         workload_name: str,
         namespace: str,
-        workload_label: str,
+        workload_obj: Any,
         limit: int = 100,
         timeout: int = 30,
     ) -> list[V1Pod]:
-        """Generic helper to list pods owned by a workload via its label selector.
-
-        Consolidates the duplicated pattern shared by ``list_pods_by_deployment``,
-        ``list_pods_by_stateful_set``, and ``list_pods_by_daemon_set``.
-
-        Args:
-            read_fn: Bound method to read the workload (e.g. ``read_namespaced_deployment``).
-            workload_name: Name of the workload resource.
-            namespace: Kubernetes namespace.
-            workload_label: Human-readable label for error messages (e.g. ``"Deployment"``).
-            limit: Maximum pods per page.
-            timeout: Timeout in seconds for paginated listing.
-
-        Returns:
-            List of ``V1Pod`` objects managed by the workload.
+        """List pods owned by an in-memory Deployment / StatefulSet / DaemonSet.
 
         Raises:
-            KubernetesControllerException: If the workload cannot be read.
+            KubernetesControllerException: If the workload has no selector.
         """
-        try:
-            workload = read_fn(name=workload_name, namespace=namespace)
-        except Exception as e:
-            raise KubernetesControllerException(f"Could not read {workload_label} {workload_name}: {e}") from e
+        spec = getattr(workload_obj, "spec", None)
+        selector = getattr(spec, "selector", None) if spec is not None else None
+        if selector is None:
+            raise KubernetesControllerException(f"{workload_name} has no spec.selector")
 
-        match_labels = self._extract_match_labels(workload.spec.selector, f"{workload_label} {workload_name}")
-        label_selector = self._labels_to_selector(match_labels)
+        match_labels = self._extract_match_labels(selector, workload_name)
+        # match_expressions cannot be reproduced from cached match_labels alone;
+        # bypass the namespace pod cache for those workloads.
+        has_match_expressions = bool(getattr(selector, "match_expressions", None))
         return self._list_pods_with_selector(
             namespace=namespace,
-            label_selector=label_selector,
+            label_selector=self._labels_to_selector(match_labels),
             limit=limit,
             timeout=timeout,
+            match_labels=match_labels,
+            skip_cache=has_match_expressions,
         )
 
     # ------------------------------------------------------------------
@@ -335,38 +332,82 @@ class KubernetesController:
             "Deployments",
         )
 
-    def list_pods_by_deployment(
+    def list_all_replica_sets(
         self,
-        deployment_name: str,
         namespace: str,
-        limit: int = 100,
-        timeout: int = 30,
-    ) -> list[V1Pod]:
-        """Return all Pods managed by the given Deployment."""
-        return self._list_pods_by_workload(
-            self.apps_v1.read_namespaced_deployment,
-            deployment_name,
-            namespace,
-            "Deployment",
-            limit,
-            timeout,
-        )
+        *,
+        page_size: int = 200,
+        label_selector: str | None = None,
+    ) -> list[V1ReplicaSet]:
+        """List every ReplicaSet in ``namespace`` via server-side pagination.
 
-    def get_deployment_latest_revision_info(self, deployment_name: str, namespace: str) -> RevisionInfo:
-        """Retrieve the pod-template-hash and revision number of the most recent ReplicaSet.
+        Raises:
+            KubernetesControllerException: If any page request fails.
+        """
+        items: list[V1ReplicaSet] = []
+        continue_token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"namespace": namespace, "limit": page_size}
+            if continue_token:
+                kwargs["_continue"] = continue_token
+            if label_selector:
+                kwargs["label_selector"] = label_selector
+            try:
+                resp = self.apps_v1.list_namespaced_replica_set(**kwargs)
+            except Exception as e:
+                raise KubernetesControllerException(f"Failed to list ReplicaSets in {namespace}: {e}") from e
+            items.extend(resp.items)
+            continue_token = resp.metadata._continue
+            if not continue_token:
+                break
+        return items
 
-        Args:
-            deployment_name: Name of the Deployment.
-            namespace: Kubernetes namespace.
+    def seed_deployment_replica_set_cache(self, namespace: str) -> None:
+        """Cache ``namespace``'s ReplicaSets grouped by owning Deployment name.
 
-        Returns:
-            ``RevisionInfo`` populated with the latest ReplicaSet hash and revision number.
+        Cached per discovery cycle to avoid an N+1 namespace list per Deployment.
+        On failure, leaves the cache empty so callers fall back to per-Deployment lookup.
         """
         try:
-            replica_sets = self.apps_v1.list_namespaced_replica_set(namespace=namespace).items
-        except Exception as e:
-            self.logger.warning(f"Failed to list replica sets for {deployment_name}: {e}")
-            return RevisionInfo()
+            replica_sets = self.list_all_replica_sets(namespace=namespace)
+        except KubernetesControllerException as e:
+            self.logger.warning(f"Failed to seed ReplicaSet cache for {namespace}: {e}")
+            return
+
+        grouped: dict[str, list[V1ReplicaSet]] = {}
+        for rs in replica_sets:
+            for owner in rs.metadata.owner_references or []:
+                if owner.kind == WorkloadType.DEPLOYMENT:
+                    grouped.setdefault(owner.name, []).append(rs)
+
+        with self._rs_cache_lock:
+            self._deployment_rs_cache[namespace] = grouped
+
+    def clear_deployment_replica_set_cache(self, namespace: str | None = None) -> None:
+        """Clear the per-cycle ReplicaSet cache (one namespace, or all when ``None``)."""
+        with self._rs_cache_lock:
+            if namespace is None:
+                self._deployment_rs_cache.clear()
+            else:
+                self._deployment_rs_cache.pop(namespace, None)
+
+    def get_deployment_latest_revision_info(self, deployment_name: str, namespace: str) -> RevisionInfo:
+        """Return the pod-template-hash and revision of the newest ReplicaSet for ``deployment_name``.
+
+        Uses the per-cycle ReplicaSet cache when seeded; otherwise falls back
+        to a one-shot paginated namespace list.
+        """
+        with self._rs_cache_lock:
+            namespace_cache = self._deployment_rs_cache.get(namespace)
+
+        if namespace_cache is not None:
+            replica_sets: list[V1ReplicaSet] = namespace_cache.get(deployment_name, [])
+        else:
+            try:
+                replica_sets = self.list_all_replica_sets(namespace=namespace)
+            except KubernetesControllerException as e:
+                self.logger.warning(f"Failed to list replica sets for {deployment_name}: {e}")
+                return RevisionInfo()
 
         latest_rs = None
         for rs in replica_sets:
@@ -396,23 +437,6 @@ class KubernetesController:
             self.apps_v1.list_stateful_set_for_all_namespaces,
             namespace,
             "StatefulSets",
-        )
-
-    def list_pods_by_stateful_set(
-        self,
-        stateful_set_name: str,
-        namespace: str,
-        limit: int = 100,
-        timeout: int = 30,
-    ) -> list[V1Pod]:
-        """Return all Pods managed by the given StatefulSet."""
-        return self._list_pods_by_workload(
-            self.apps_v1.read_namespaced_stateful_set,
-            stateful_set_name,
-            namespace,
-            "StatefulSet",
-            limit,
-            timeout,
         )
 
     def get_stateful_set_latest_revision_info(self, stateful_set_name: str, namespace: str) -> RevisionInfo:
@@ -457,23 +481,6 @@ class KubernetesController:
             self.apps_v1.list_daemon_set_for_all_namespaces,
             namespace,
             "DaemonSets",
-        )
-
-    def list_pods_by_daemon_set(
-        self,
-        daemon_set_name: str,
-        namespace: str,
-        limit: int = 100,
-        timeout: int = 30,
-    ) -> list[V1Pod]:
-        """List pods managed by a DaemonSet."""
-        return self._list_pods_by_workload(
-            self.apps_v1.read_namespaced_daemon_set,
-            daemon_set_name,
-            namespace,
-            "DaemonSet",
-            limit,
-            timeout,
         )
 
     # ------------------------------------------------------------------
@@ -523,24 +530,89 @@ class KubernetesController:
             label_selector=label_selector,
             limit=limit,
             timeout=timeout,
+            match_labels=match_labels,
         )
 
     # ------------------------------------------------------------------
     # Pod listing with pagination
     # ------------------------------------------------------------------
 
-    def _list_pods_with_selector(self, namespace: str, label_selector: str, limit: int, timeout: int) -> list[V1Pod]:
-        """List pods matching a label selector with pagination and timeout.
+    def list_all_pods(
+        self,
+        namespace: str,
+        *,
+        page_size: int = 200,
+    ) -> list[V1Pod]:
+        """List every pod in ``namespace`` via server-side pagination.
 
-        Args:
-            namespace: Kubernetes namespace.
-            label_selector: Comma-separated ``key=value`` label selector.
-            limit: Maximum pods per API page.
-            timeout: Total timeout in seconds for the paginated listing.
-
-        Returns:
-            Aggregated list of ``V1Pod`` objects.
+        Raises:
+            KubernetesControllerException: If any page request fails.
         """
+        items: list[V1Pod] = []
+        continue_token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"namespace": namespace, "limit": page_size}
+            if continue_token:
+                kwargs["_continue"] = continue_token
+            try:
+                resp = self.core_v1.list_namespaced_pod(**kwargs)
+            except Exception as e:
+                raise KubernetesControllerException(f"Failed to list pods in {namespace}: {e}") from e
+            items.extend(resp.items)
+            continue_token = resp.metadata._continue
+            if not continue_token:
+                break
+        return items
+
+    def seed_namespace_pod_cache(self, namespace: str) -> None:
+        """Cache every pod in ``namespace`` so per-workload lookups stay in memory.
+
+        Cached per discovery cycle. On failure, leaves the cache empty so
+        callers fall back to the per-workload API path.
+        """
+        try:
+            pods = self.list_all_pods(namespace=namespace)
+        except KubernetesControllerException as e:
+            self.logger.warning(f"Failed to seed namespace pod cache for {namespace}: {e}")
+            return
+
+        with self._namespace_pod_cache_lock:
+            self._namespace_pod_cache[namespace] = pods
+
+    def clear_namespace_pod_cache(self, namespace: str | None = None) -> None:
+        """Clear the per-cycle namespace pod cache (one namespace, or all when ``None``)."""
+        with self._namespace_pod_cache_lock:
+            if namespace is None:
+                self._namespace_pod_cache.clear()
+            else:
+                self._namespace_pod_cache.pop(namespace, None)
+
+    def _list_pods_with_selector(
+        self,
+        namespace: str,
+        label_selector: str,
+        limit: int,
+        timeout: int,
+        match_labels: dict[str, str],
+        skip_cache: bool = False,
+    ) -> list[V1Pod]:
+        """List pods matching ``label_selector`` with pagination and timeout.
+
+        Uses the per-cycle namespace pod cache when seeded. ``skip_cache=True``
+        forces the API path — required when the workload selector has
+        ``match_expressions`` (which the cached ``match_labels`` filter cannot
+        reproduce server-side semantics for).
+        """
+        if not skip_cache:
+            with self._namespace_pod_cache_lock:
+                cached_pods = self._namespace_pod_cache.get(namespace)
+            if cached_pods is not None:
+                return [
+                    p
+                    for p in cached_pods
+                    if all((p.metadata.labels or {}).get(k) == v for k, v in match_labels.items())
+                ]
+
         start = time.time()
         pods: list[V1Pod] = []
         _continue: str | None = None

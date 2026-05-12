@@ -45,14 +45,10 @@ class WorkloadDiscovery:
             self._fetch_methods[WorkloadType.JOB] = self.k8s_controller.get_jobs
             self._fetch_methods[WorkloadType.CRON_JOB] = self.k8s_controller.get_cron_jobs
 
-        # Mapping workload types to their pod listing methods
-        self._pod_methods: dict[WorkloadType, Callable[..., list[V1Pod]]] = {
-            WorkloadType.DEPLOYMENT: self.k8s_controller.list_pods_by_deployment,
-        }
-        if include_statefulsets:
-            self._pod_methods[WorkloadType.STATEFUL_SET] = self.k8s_controller.list_pods_by_stateful_set
-        if include_daemonsets:
-            self._pod_methods[WorkloadType.DAEMON_SET] = self.k8s_controller.list_pods_by_daemon_set
+        # Owner-based pod listing (Deployment / StatefulSet / DaemonSet) is dispatched
+        # directly to a single controller method; only Job needs its own entry because
+        # of the controller-uid selector fallback.
+        self._pod_methods: dict[WorkloadType, Callable[..., list[V1Pod]]] = {}
         if include_jobs:
             self._pod_methods[WorkloadType.JOB] = self.k8s_controller.list_pods_by_job
 
@@ -87,10 +83,19 @@ class WorkloadDiscovery:
         namespace: str,
         workload_obj: KubernetesWorkload | None = None,
     ) -> WorkloadInspectionResult:
-        """Gathers detailed info for a single workload."""
-        result = WorkloadInspectionResult(name=workload_name, type=workload_type, namespace=namespace)
+        """Gather detailed info for a single workload.
 
-        # Extract PodSpec
+        ``workload_obj`` (when provided) is reused for pod-spec extraction,
+        DaemonSet revision derivation, and pod listing, then carried forward
+        on the result for the downstream stability audit.
+        """
+        result = WorkloadInspectionResult(
+            name=workload_name,
+            type=workload_type,
+            namespace=namespace,
+            workload_obj=workload_obj,
+        )
+
         if workload_obj:
             try:
                 if workload_type == WorkloadType.CRON_JOB:
@@ -100,34 +105,45 @@ class WorkloadDiscovery:
             except AttributeError:
                 self.logger.warning(f"Could not extract pod_spec from {workload_name}")
 
-        # Get Latest Revision
         if workload_type in self._revision_methods:
             try:
                 result.latest_revision = self._revision_methods[workload_type](workload_name, namespace)
             except Exception as e:
                 self.logger.warning(f"Failed to get revision for {workload_name}: {e}")
 
-        # Special handling for DaemonSet revision
-        if workload_type == WorkloadType.DAEMON_SET:
-            result.latest_revision = self._get_daemonset_revision(workload_name=workload_name, namespace=namespace)
+        if workload_type == WorkloadType.DAEMON_SET and workload_obj is not None:
+            result.latest_revision = self._get_daemonset_revision(
+                workload_name=workload_name,
+                workload_obj=workload_obj,
+            )
 
-        # Get Pods
-        if workload_type in self._pod_methods:
-            try:
+        try:
+            if workload_obj is not None and workload_type in (
+                WorkloadType.DEPLOYMENT,
+                WorkloadType.STATEFUL_SET,
+                WorkloadType.DAEMON_SET,
+            ):
+                result.pods = self.k8s_controller.list_pods_for_workload(
+                    workload_name=workload_name, namespace=namespace, workload_obj=workload_obj
+                )
+            elif workload_type in self._pod_methods:
                 result.pods = self._pod_methods[workload_type](workload_name, namespace)
-            except KubernetesControllerException:
-                result.pods = []
-            except Exception as e:
-                self.logger.error(f"Error listing pods for {workload_name}: {e}")
-                raise
+        except KubernetesControllerException:
+            result.pods = []
+        except Exception as e:
+            self.logger.error(f"Error listing pods for {workload_name}: {e}")
+            raise
 
         return result
 
-    def _get_daemonset_revision(self, workload_name: str, namespace: str) -> RevisionInfo | None:
-        """Helper to extract DaemonSet revision from pod template labels."""
+    def _get_daemonset_revision(
+        self,
+        workload_name: str,
+        workload_obj: KubernetesWorkload,
+    ) -> RevisionInfo | None:
+        """Extract a DaemonSet's controller-revision-hash from its pod template labels."""
         try:
-            ds = self.k8s_controller.apps_v1.read_namespaced_daemon_set(name=workload_name, namespace=namespace)
-            labels = ds.spec.template.metadata.labels or {}
+            labels = workload_obj.spec.template.metadata.labels or {}
             revision_hash = labels.get("controller-revision-hash", "")
             if revision_hash:
                 return RevisionInfo(hash=revision_hash)
@@ -175,30 +191,38 @@ class WorkloadDiscovery:
                     }
                 )
 
-        total_workloads = len(tasks)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=DEFAULT_THREAD_POOL_WORKERS) as executor:
-            future_to_task = {executor.submit(self.inspect_workload, **task): task for task in tasks}
+        # Prefetch ReplicaSets and pods once per cycle so per-workload lookups
+        # are in-memory; cleared in ``finally`` to avoid stale data on the next cycle.
+        self.k8s_controller.seed_deployment_replica_set_cache(namespace=namespace)
+        self.k8s_controller.seed_namespace_pod_cache(namespace=namespace)
+        try:
+            total_workloads = len(tasks)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=DEFAULT_THREAD_POOL_WORKERS) as executor:
+                future_to_task = {executor.submit(self.inspect_workload, **task): task for task in tasks}
 
-            for idx, future in enumerate(concurrent.futures.as_completed(future_to_task), start=1):
-                task = future_to_task[future]
-                workload_name = task["workload_name"]
-                try:
-                    result = future.result()
-                    self.logger.info(f"Workload {workload_name} inspected {idx}/{total_workloads}")
-                    inspection_results.append(result)
-                except Exception as e:
-                    self.logger.error(f"Failed to inspect workload {workload_name}: {e}")
-                    # Add a partial result to indicate failure
-                    inspection_results.append(
-                        WorkloadInspectionResult(
-                            name=workload_name,
-                            type=task["workload_type"],
-                            namespace=namespace,
-                            latest_revision=None,
-                            pods=[],
-                            pod_spec=None,
-                            error=str(e),
+                for idx, future in enumerate(concurrent.futures.as_completed(future_to_task), start=1):
+                    task = future_to_task[future]
+                    workload_name = task["workload_name"]
+                    try:
+                        result = future.result()
+                        self.logger.info(f"Workload {workload_name} inspected {idx}/{total_workloads}")
+                        inspection_results.append(result)
+                    except Exception as e:
+                        self.logger.error(f"Failed to inspect workload {workload_name}: {e}")
+                        # Add a partial result to indicate failure
+                        inspection_results.append(
+                            WorkloadInspectionResult(
+                                name=workload_name,
+                                type=task["workload_type"],
+                                namespace=namespace,
+                                latest_revision=None,
+                                pods=[],
+                                pod_spec=None,
+                                error=str(e),
+                            )
                         )
-                    )
+        finally:
+            self.k8s_controller.clear_deployment_replica_set_cache(namespace=namespace)
+            self.k8s_controller.clear_namespace_pod_cache(namespace=namespace)
 
         return inspection_results, skipped_workloads
