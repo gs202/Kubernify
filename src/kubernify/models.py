@@ -218,6 +218,10 @@ class WorkloadInspectionResult:
     pods: list[V1Pod] = field(default_factory=list)
     pod_spec: V1PodSpec | None = None
     error: str | None = None
+    # Carried forward from discovery so downstream consumers can reuse it
+    # without a second ``read_namespaced_*`` call. ``None`` for synthesised
+    # / error-path results.
+    workload_obj: KubernetesWorkload | None = None
 
 
 @dataclass
