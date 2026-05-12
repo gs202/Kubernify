@@ -1577,13 +1577,16 @@ class TestConstructComponentMapIgnoredLogging:
         )
 
         with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
-            component_map = construct_component_map(
+            result = construct_component_map(
                 workloads=[workload],
                 manifest=manifest,
                 repository_anchor="acme-foo",
             )
 
-        assert component_map == {}
+        assert result.component_map == {}
+        assert result.not_in_manifest_workloads == {"foo-ns-1234567890123-bar-workers-router"}
+        assert result.container_skipped_workloads == set()
+        assert result.unparseable_image_workloads == set()
         ignoring_records = [r for r in caplog.records if "Ignoring workload" in r.message]
         assert len(ignoring_records) == 1
         message = ignoring_records[0].message
@@ -1602,13 +1605,14 @@ class TestConstructComponentMapIgnoredLogging:
         )
 
         with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
-            component_map = construct_component_map(
+            result = construct_component_map(
                 workloads=[workload],
                 manifest=manifest,
                 repository_anchor="acme-foo",
             )
 
-        assert component_map == {}
+        assert result.component_map == {}
+        assert result.not_in_manifest_workloads == {"reloader"}
         ignoring_records = [r for r in caplog.records if "Ignoring workload" in r.message]
         assert len(ignoring_records) == 1
         message = ignoring_records[0].message
@@ -1626,13 +1630,14 @@ class TestConstructComponentMapIgnoredLogging:
         )
 
         with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
-            component_map = construct_component_map(
+            result = construct_component_map(
                 workloads=[workload],
                 manifest=manifest,
                 repository_anchor="my-app",
             )
 
-        assert "backend" in component_map
+        assert "backend" in result.component_map
+        assert result.not_in_manifest_workloads == set()
         ignoring_records = [r for r in caplog.records if "Ignoring workload" in r.message]
         assert ignoring_records == []
 
@@ -1680,11 +1685,205 @@ class TestConstructComponentMapIgnoredLogging:
         assert "parsed component 'component-b'" in joined
 
 
+class TestConstructComponentMapBuckets:
+    """Tests for the per-workload exclusion buckets returned by ``construct_component_map``.
+
+    Bucket precedence: ``included > container_skipped > unparseable > not_in_manifest``.
+    """
+
+    def test_workload_with_all_containers_skipped_goes_to_container_skipped(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A workload whose every resolved container is filtered by ``--skip-containers`` is container_skipped."""
+        manifest = {"backend": "v1.0.0"}
+        workload = _make_workload_with_images(
+            name="backend-deployment",
+            images=["registry.example.com/org/my-app/backend:v1.0.0"],
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            result = construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="my-app",
+                skip_containers=["backend"],
+            )
+
+        assert result.component_map == {}
+        assert result.container_skipped_workloads == {"backend-deployment"}
+        assert result.not_in_manifest_workloads == set()
+        assert result.unparseable_image_workloads == set()
+        debug_records = [r for r in caplog.records if "Container-skipping workload" in r.message]
+        assert len(debug_records) == 1
+        message = debug_records[0].message
+        assert "'backend-deployment'" in message
+        assert "matched skip pattern 'backend'" in message
+        assert "on container 'backend'" in message
+
+    def test_workload_with_one_skipped_one_included_container_is_included(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``included`` precedence: a contributing image keeps the workload ``included``, not ``container_skipped``."""
+        manifest = {"backend": "v1.0.0", "sidecar": "v2.0.0"}
+        workload = _make_workload_with_images(
+            name="my-workload",
+            images=[
+                "registry.example.com/org/my-app/backend:v1.0.0",
+                "registry.example.com/org/my-app/sidecar:v2.0.0",
+            ],
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            result = construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="my-app",
+                skip_containers=["sidecar"],
+            )
+
+        assert "backend" in result.component_map
+        assert result.container_skipped_workloads == set()
+        assert result.unparseable_image_workloads == set()
+        assert result.not_in_manifest_workloads == set()
+        # Per the spec, deferred container-skipped DEBUG logs MUST NOT fire when
+        # the workload ends up ``included``.
+        debug_records = [r for r in caplog.records if "Container-skipping workload" in r.message]
+        assert debug_records == []
+
+    def test_workload_with_unparseable_image_goes_to_unparseable(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A workload whose every image fails to parse is bucketed as unparseable."""
+        manifest = {"backend": "v1.0.0"}
+        workload = _make_workload_with_images(
+            name="malformed-workload",
+            images=[""],  # parse_image_reference raises ValueError on empty
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            result = construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="my-app",
+            )
+
+        assert result.component_map == {}
+        assert result.unparseable_image_workloads == {"malformed-workload"}
+        assert result.container_skipped_workloads == set()
+        assert result.not_in_manifest_workloads == set()
+        debug_records = [r for r in caplog.records if "Could not parse container image" in r.message]
+        assert len(debug_records) == 1
+        message = debug_records[0].message
+        assert "for workload 'malformed-workload'" in message
+
+    def test_workload_with_one_parseable_one_unparseable_image_is_included(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``included`` precedence: at least one parseable manifest-match image keeps the workload ``included``."""
+        manifest = {"backend": "v1.0.0"}
+        workload = _make_workload_with_images(
+            name="mixed-workload",
+            images=[
+                "",  # unparseable
+                "registry.example.com/org/my-app/backend:v1.0.0",  # parseable + matches manifest
+            ],
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            result = construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="my-app",
+            )
+
+        assert "backend" in result.component_map
+        assert result.unparseable_image_workloads == set()
+        assert result.container_skipped_workloads == set()
+        assert result.not_in_manifest_workloads == set()
+        # Per the spec, deferred unparseable DEBUG logs MUST NOT fire when the
+        # workload ends up ``included``.
+        debug_records = [r for r in caplog.records if "Could not parse container image" in r.message]
+        assert debug_records == []
+
+    def test_dedupes_container_skipped_log_across_pods_with_same_image(self, caplog: pytest.LogCaptureFixture) -> None:
+        """5 pods sharing one container-skipped image emit exactly 1 DEBUG line, not 5."""
+        manifest = {"backend": "v1.0.0"}
+        workload = _make_workload_with_images(
+            name="backend-deployment",
+            images=["registry.example.com/org/my-app/backend:v1.0.0"],
+            pod_count=5,
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="my-app",
+                skip_containers=["backend"],
+            )
+
+        debug_records = [r for r in caplog.records if "Container-skipping workload" in r.message]
+        assert len(debug_records) == 1
+
+    def test_dedupes_unparseable_log_across_pods_with_same_image(self, caplog: pytest.LogCaptureFixture) -> None:
+        """5 pods sharing one unparseable image emit exactly 1 DEBUG line, not 5."""
+        manifest = {"backend": "v1.0.0"}
+        workload = _make_workload_with_images(
+            name="malformed-workload",
+            images=[""],
+            pod_count=5,
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="my-app",
+            )
+
+        debug_records = [r for r in caplog.records if "Could not parse container image" in r.message]
+        assert len(debug_records) == 1
+
+    def test_precedence_container_skipped_beats_unparseable_and_not_in_manifest(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A workload with all three exclusion categories (no included) ends up in container_skipped."""
+        manifest = {"backend": "v1.0.0"}
+        workload = _make_workload_with_images(
+            name="multi-issue-workload",
+            images=[
+                # parseable; matches manifest -> would be included, but skipped by pattern.
+                "registry.example.com/org/my-app/backend:v1.0.0",
+                "",  # unparseable
+                "registry.example.com/org/my-app/something-else:v1.0.0",  # parseable; not in manifest
+            ],
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kubernify.cli"):
+            result = construct_component_map(
+                workloads=[workload],
+                manifest=manifest,
+                repository_anchor="my-app",
+                skip_containers=["backend"],
+            )
+
+        assert result.component_map == {}
+        assert result.container_skipped_workloads == {"multi-issue-workload"}
+        assert result.unparseable_image_workloads == set()
+        assert result.not_in_manifest_workloads == set()
+        # The not-in-manifest log fires inline (before precedence resolution),
+        # so it IS expected for the unmatched image. The container-skipped log
+        # only fires post-precedence because the workload landed in that bucket.
+        container_skipped_records = [r for r in caplog.records if "Container-skipping workload" in r.message]
+        assert len(container_skipped_records) == 1
+        unparseable_records = [r for r in caplog.records if "Could not parse container image" in r.message]
+        # Unparseable log is suppressed because container_skipped wins per precedence.
+        assert unparseable_records == []
+
+
 class TestLogDiscoverySummary:
     """Tests for the aggregate ``Discovery summary`` log line."""
 
-    def test_summary_counts_included_skipped_ignored_inspected(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Summary line reports correct counts for included/skipped/ignored/inspected."""
+    def test_summary_counts_all_five_buckets(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Summary line reports correct counts for all five buckets and ``inspected``."""
         included_workload = _make_workload_with_images(
             name="backend-deployment",
             images=["registry.example.com/org/my-app/backend:v1.2.3"],
@@ -1692,6 +1891,14 @@ class TestLogDiscoverySummary:
         ignored_workload = _make_workload_with_images(
             name="other-workload",
             images=["registry.example.com/org/my-app/unmatched:v1.0.0"],
+        )
+        container_skipped_workload = _make_workload_with_images(
+            name="container-skipped-workload",
+            images=["registry.example.com/org/my-app/sidecar:v1.0.0"],
+        )
+        unparseable_workload = _make_workload_with_images(
+            name="unparseable-workload",
+            images=[""],
         )
         component_map: dict[str, list[ComponentMapEntry]] = {
             "backend": [
@@ -1708,18 +1915,49 @@ class TestLogDiscoverySummary:
 
         with caplog.at_level(logging.INFO, logger="kubernify.cli"):
             _log_discovery_summary(
-                discovered_items=[included_workload, ignored_workload],
+                discovered_workloads=[
+                    included_workload,
+                    ignored_workload,
+                    container_skipped_workload,
+                    unparseable_workload,
+                ],
                 skipped_workload_names=["skipped-a", "skipped-b", "skipped-c"],
                 component_map=component_map,
+                container_skipped_workloads={"container-skipped-workload"},
+                unparseable_image_workloads={"unparseable-workload"},
+                not_in_manifest_workloads={"other-workload"},
             )
 
         summary_records = [r for r in caplog.records if "Discovery summary" in r.message]
         assert len(summary_records) == 1
         message = summary_records[0].message
         assert "1 included" in message
-        assert "3 skipped (--skip-containers)" in message
-        assert "1 ignored (not in manifest)" in message
-        assert "2 inspected" in message
+        assert "3 skipped (--skip-containers workload-name match)" in message
+        assert "1 container-skipped (--skip-containers container-name match)" in message
+        assert "1 unparseable images" in message
+        assert "1 not in manifest" in message
+        assert "4 inspected" in message
+
+    def test_summary_invariant_warning_emitted_when_buckets_dont_sum(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A WARNING is emitted when included + container_skipped + unparseable + not_in_manifest != inspected."""
+        # 2 inspected workloads, but only 0 included + 0 container_skipped + 0 unparseable + 0 not_in_manifest = 0.
+        # Invariant violated: 0 != 2.
+        workload_a = _make_workload_with_images(name="a", images=["registry.example.com/org/my-app/a:v1.0.0"])
+        workload_b = _make_workload_with_images(name="b", images=["registry.example.com/org/my-app/b:v1.0.0"])
+
+        with caplog.at_level(logging.WARNING, logger="kubernify.cli"):
+            _log_discovery_summary(
+                discovered_workloads=[workload_a, workload_b],
+                skipped_workload_names=[],
+                component_map={},
+                container_skipped_workloads=set(),
+                unparseable_image_workloads=set(),
+                not_in_manifest_workloads=set(),
+            )
+
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING and "invariant" in r.message]
+        assert len(warning_records) == 1
+        assert "expected 2 (inspected)" in warning_records[0].message
 
     def test_summary_emitted_by_run_verification(self, caplog: pytest.LogCaptureFixture) -> None:
         """``run_verification`` emits the discovery summary log line."""
@@ -1776,6 +2014,101 @@ class TestLogDiscoverySummary:
         assert len(summary_records) >= 1
         message = summary_records[0].message
         assert "1 included" in message
-        assert "0 skipped (--skip-containers)" in message
-        assert "0 ignored (not in manifest)" in message
+        assert "0 skipped (--skip-containers workload-name match)" in message
+        assert "0 container-skipped (--skip-containers container-name match)" in message
+        assert "0 unparseable images" in message
+        assert "0 not in manifest" in message
         assert "1 inspected" in message
+
+    def test_summary_emitted_by_run_verification_with_one_of_each_category(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``run_verification`` against a fixture cluster with one workload per category reports correct counts."""
+        args = argparse.Namespace(
+            manifest='{"backend": "v1.2.3"}',
+            context="test-context",
+            gke_project=None,
+            namespace="default",
+            anchor="my-app",
+            timeout=300,
+            restart_threshold=3,
+            min_uptime=0,
+            allow_zero_replicas=False,
+            allow_zero_replicas_for=None,
+            dry_run=True,
+            include_statefulsets=False,
+            include_daemonsets=False,
+            include_jobs=False,
+            required_workloads=None,
+            skip_containers="sidecar",  # filters by container name post-resolution
+            component_aliases=None,
+            ignore_tombstone_pods=False,
+            output_file=None,
+        )
+
+        # 1 included
+        included = _make_workload_with_images(
+            name="backend-deployment",
+            images=["registry.example.com/org/my-app/backend:v1.2.3"],
+        )
+        # 1 container-skipped (sidecar matches --skip-containers)
+        container_skipped = _make_workload_with_images(
+            name="sidecar-deployment",
+            # sidecar IS in the manifest? No — we need it resolved AND skipped.
+            # Add sidecar to manifest by aliasing? Simpler: skip on workload-name match
+            # would land in the discovery-time skipped bucket, which is NOT what we want.
+            # Use container-name match: image resolves to a manifest key but the resolved
+            # name matches the skip pattern.
+            images=["registry.example.com/org/my-app/sidecar:v1.0.0"],
+        )
+        # 1 unparseable
+        unparseable = _make_workload_with_images(
+            name="unparseable-workload",
+            images=[""],
+        )
+        # 1 not-in-manifest
+        not_in_manifest = _make_workload_with_images(
+            name="other-workload",
+            images=["registry.example.com/org/my-app/unmatched:v1.0.0"],
+        )
+        # The container-skipped workload's resolved component must be in the manifest
+        # so _resolve_component returns non-None and _should_skip then filters it.
+        # Add 'sidecar' to manifest for this scenario.
+        args.manifest = '{"backend": "v1.2.3", "sidecar": "v1.0.0"}'
+
+        mock_controller = MagicMock()
+        mock_discovery = MagicMock()
+        mock_auditor = MagicMock()
+        mock_discovery.discover_cluster_state.return_value = (
+            [included, container_skipped, unparseable, not_in_manifest],
+            [],
+        )
+        mock_auditor.audit_workload.return_value = StabilityAuditResult(
+            converged=True,
+            revision_consistent=True,
+            pods_healthy=True,
+            scheduling_complete=True,
+            job_complete=True,
+            errors=[],
+        )
+
+        with (
+            patch("kubernify.cli.KubernetesController", return_value=mock_controller),
+            patch("kubernify.cli.WorkloadDiscovery", return_value=mock_discovery),
+            patch("kubernify.cli.StabilityAuditor", return_value=mock_auditor),
+            caplog.at_level(logging.INFO, logger="kubernify.cli"),
+        ):
+            run_verification(args=args)
+
+        summary_records = [r for r in caplog.records if "Discovery summary" in r.message]
+        assert len(summary_records) >= 1
+        message = summary_records[0].message
+        assert "1 included" in message
+        assert "0 skipped (--skip-containers workload-name match)" in message
+        assert "1 container-skipped (--skip-containers container-name match)" in message
+        assert "1 unparseable images" in message
+        assert "1 not in manifest" in message
+        assert "4 inspected" in message
+        # Invariant: 1 + 1 + 1 + 1 == 4 — no warning expected.
+        invariant_warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "invariant" in r.message]
+        assert invariant_warnings == []

@@ -122,7 +122,7 @@ class TestConstructComponentMap:
             workloads=workloads,
             manifest=manifest,
             repository_anchor="my-app",
-        )
+        ).component_map
 
         assert "backend" in result
         assert "frontend" in result
@@ -148,7 +148,7 @@ class TestConstructComponentMap:
             manifest=manifest,
             repository_anchor="my-app",
             skip_containers=["frontend"],
-        )
+        ).component_map
 
         assert "backend" in result
         assert "frontend" not in result
@@ -167,7 +167,7 @@ class TestConstructComponentMap:
             workloads=workloads,
             manifest=manifest,
             repository_anchor="my-app",
-        )
+        ).component_map
 
         # redis is not in the manifest, so it should not appear
         assert "redis" not in result
@@ -187,7 +187,7 @@ class TestConstructComponentMap:
             manifest=manifest,
             repository_anchor="my-app",
             reverse_aliases={"bar-baz": ["foo"]},
-        )
+        ).component_map
 
         assert "foo" in result
         assert result["foo"][0].actual_version == "v1.0.0"
@@ -211,7 +211,7 @@ class TestConstructComponentMap:
             manifest=manifest,
             repository_anchor="my-app",
             reverse_aliases={"bar-baz": ["foo"]},
-        )
+        ).component_map
 
         assert "backend" in result
         assert "foo" in result
@@ -232,7 +232,7 @@ class TestConstructComponentMap:
             workloads=workloads,
             manifest=manifest,
             repository_anchor="my-app",
-        )
+        ).component_map
 
         # Without alias, bar-baz != foo, so it's not in the map
         assert "foo" not in result
@@ -257,7 +257,7 @@ class TestConstructComponentMap:
             manifest=manifest,
             repository_anchor="my-app",
             reverse_aliases={"shared-svc": ["foo", "bar"]},
-        )
+        ).component_map
 
         assert "foo" in result
         assert "bar" in result
@@ -279,7 +279,7 @@ class TestConstructComponentMap:
             manifest=manifest,
             repository_anchor="my-app",
             reverse_aliases={"shared-svc": ["foo", "bar"]},
-        )
+        ).component_map
 
         # Neither "foo" nor "bar" is in the workload name, but
         # "shared-svc" IS in the manifest, so it falls back to that.
@@ -799,7 +799,7 @@ class TestExtractContainersTombstoneFiltering:
             manifest=manifest,
             repository_anchor="anchor",
             ignore_tombstone_pods=True,
-        )
+        ).component_map
 
         assert "comp" in component_map
         entries = component_map["comp"]
