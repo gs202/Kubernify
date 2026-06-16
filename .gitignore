@@ -211,3 +211,6 @@ src/kubernify/_version.py
 
 # Internal plans
 plans/
+
+# Kubernify CLI report output
+kubernify_report.json
